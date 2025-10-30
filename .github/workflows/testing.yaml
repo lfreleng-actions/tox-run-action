@@ -3,30 +3,30 @@
 # SPDX-FileCopyrightText: 2025 The Linux Foundation
 
 # Action test/validation workflow
-name: "Test GitHub Action 🧪"
+name: 'Test GitHub Action 🧪'
 
 # yamllint disable-line rule:truthy
 on:
   workflow_dispatch:
   push:
-    branches: ["main"]
+    branches: ['main']
   pull_request:
-    branches: ["main"]
+    branches: ['main']
 
 concurrency:
-  group: "${{ github.workflow }}-${{ github.ref }}"
+  group: '${{ github.workflow }}-${{ github.ref }}'
   cancel-in-progress: true
 
 permissions: {}
 
 jobs:
   ### Test the GitHub Action in this Repository ###
-  tests:
-    name: "Test local GitHub Action"
+  test-basic:
+    name: 'Test basic tox-run functionality'
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    timeout-minutes: 10 # Increase this timeout value as needed
+    timeout-minutes: 10
     steps:
       # Harden the runner used by this workflow
       # yamllint disable-line rule:line-length
@@ -34,42 +34,125 @@ jobs:
         with:
           egress-policy: audit
 
-      - name: "Checkout repository"
+      - name: 'Checkout this repository'
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
 
-      # Perform setup prior to running test(s)
-      - name: "Testing setup step"
-        shell: bash
-        run: |
-          # Testing setup step
-          echo "Testing setup step"
-          echo "Testing setup step/summary output" >> "$GITHUB_STEP_SUMMARY"
+      - name: 'Checkout test Python project'
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          repository: 'lfreleng-actions/test-python-project'
+          path: 'test-python-project'
 
-      - name: "Running local action: ${{ github.repository }}"
+      - name: 'Test multiple environments in parallel'
         uses: ./
         with:
-          input: "test input 💬"
+          path_prefix: 'test-python-project'
+          python-version: '3.12'
+          tox-envs: 'py311,py312'
+          parallel: 'auto'
 
-      - name: "Validated local action: ${{ github.repository }}"
+  test-specific-envs:
+    name: 'Test specific environment selection'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 10
+    steps:
+      # yamllint disable-line rule:line-length
+      - uses: step-security/harden-runner@f4a75cfd619ee5ce8d5b864b0d183aff3c69b55a # v2.13.1
+        with:
+          egress-policy: audit
+
+      - name: 'Checkout this repository'
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: 'Checkout test Python project'
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          repository: 'lfreleng-actions/test-python-project'
+          path: 'test-python-project'
+
+      - name: 'Test specific environments'
+        uses: ./
+        with:
+          path_prefix: 'test-python-project'
+          python-version: '3.11'
+          tox-envs: 'py311'
+          parallel: '1'
+
+  test-pre-build-script:
+    name: 'Test pre-build script functionality'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 10
+    steps:
+      # yamllint disable-line rule:line-length
+      - uses: step-security/harden-runner@f4a75cfd619ee5ce8d5b864b0d183aff3c69b55a # v2.13.1
+        with:
+          egress-policy: audit
+
+      - name: 'Checkout this repository'
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: 'Checkout test Python project'
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          repository: 'lfreleng-actions/test-python-project'
+          path: 'test-python-project'
+
+      - name: 'Create pre-build script'
         shell: bash
         run: |
-          # Local action validation
-          echo "Validated local action: ${{ github.repository }}"
-          echo "Validation step summary output" >> "$GITHUB_STEP_SUMMARY"
+          cat > prebuild.sh << 'EOF'
+          #!/bin/bash
+          echo "Pre-build script executed"
+          touch "$GITHUB_WORKSPACE/test-python-project/prebuild-marker"
+          EOF
+          chmod +x prebuild.sh
 
-      # yamllint disable-line rule:line-length
-      - name: "Running local action: ${{ github.repository }} [Override Failure]"
+      - name: 'Test with pre-build script'
         uses: ./
-        id: failure
+        with:
+          path_prefix: 'test-python-project'
+          python-version: '3.11'
+          tox-envs: 'py311'
+          pre-build-script: './prebuild.sh'
+
+      - name: 'Verify pre-build script ran'
+        shell: bash
+        run: |
+          if [[ ! -f "test-python-project/prebuild-marker" ]]; then
+            echo "Pre-build script did not execute properly"
+            exit 1
+          fi
+          echo "Pre-build script verification passed"
+
+  test-error-handling:
+    name: 'Test error handling'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 10
+    steps:
+      # yamllint disable-line rule:line-length
+      - uses: step-security/harden-runner@f4a75cfd619ee5ce8d5b864b0d183aff3c69b55a # v2.13.1
+        with:
+          egress-policy: audit
+
+      - name: 'Checkout this repository'
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: 'Test missing tox.ini handling'
+        uses: ./
+        id: missing-tox
         continue-on-error: true
         with:
-          invalid_input: "Some garbage"
+          path_prefix: 'nonexistent-dir'
 
-      # Failure testing is also important
-      - name: "Error if step above did NOT fail"
-        if: steps.failure.outcome == 'success'
+      - name: 'Verify error handling'
+        if: steps.missing-tox.outcome == 'success'
         shell: bash
         run: |
-          # Error if step above did NOT fail
-          echo "Error: previous test step did NOT fail ❌"
+          echo 'Error: Action should have failed with missing tox.ini'
           exit 1

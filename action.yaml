@@ -2,36 +2,241 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: 2025 The Linux Foundation
 
-# actions-template
-name: "🛠️ Actions Template"
-description: "Description of action"
-# Any relevant notes/observations can go here
+name: 'Run TOX'
+description: "Run tox with specified Python version and environments"
 
 inputs:
-  input:
-    description: "Description of input"
-    required: true
+  path_prefix:
+    description: 'Directory location containing project code and tox.ini'
+    required: false
+    default: '.'
+  python-version:
+    description: 'Version of Python to use'
+    required: false
+  python-version-file:
+    # yamllint disable-line rule:line-length
+    description: 'File containing the Python version to use (e.g. pyproject.toml)'
+    required: false
+  tox-envs:
+    description: 'Tox envs to run on this py-version'
+    required: false
+  parallel:
+    description: 'Whether to run jobs in parallel'
+    required: false
+    default: 'auto'
+  pre-build-script:
+    # yamllint disable-line rule:line-length
+    description: 'Path to optional pre-build repository shell script; path traversal blocked'
+    required: false
 
 outputs:
-  output:
-    description: "Description of output"
-    value: ${{ steps.code.outputs.output }}
+  build-backend:
+    description: "The detected Python dependency management tool"
+    # Supported: uv, pdm, poetry, pipenv, pip-tools, pip, or none
+    value: ${{ steps.detect-deps.outputs.build-backend }}
 
 runs:
-  using: "composite"
+  using: 'composite'
   steps:
-    - name: "Friendly Name"
-      id: code
+    - name: 'Validate action/environment'
       shell: bash
       run: |
-        # Friendly Name
-        input="${{ inputs.input }}"
-        if [ -z "$input" ]; then
-          echo "Error: mandatory input was not set/configured ❌"
+        # Validate action/environment
+        TOX_DIR="${GITHUB_WORKSPACE}/${{ inputs.path_prefix }}"
+        echo "🔍 Validating tox directory: $TOX_DIR"
+
+        if [[ ! -d "$TOX_DIR" ]]; then
+          echo "Error: specified path_prefix '${{ inputs.path_prefix }}'" \
+               "does not exist ❌"
+          echo "Current working directory: $(pwd)"
+          echo "Available directories:"
+          ls -la "${GITHUB_WORKSPACE}" || echo "Cannot list workspace contents"
           exit 1
         fi
 
-        echo "output=$input" >> "$GITHUB_ENV"
-        echo "output=$input" >> "$GITHUB_OUTPUT"
-        echo "Action received: $input ✅"
-        echo "Action received: $input ✅" >> "$GITHUB_STEP_SUMMARY"
+        # Check for tox.ini file existence and readability
+        if [[ ! -f "$TOX_DIR/tox.ini" || ! -r "$TOX_DIR/tox.ini" ]]; then
+          if [[ ! -f "$TOX_DIR/tox.ini" ]]; then
+            echo "❌ Error: tox.ini not found in '${{ inputs.path_prefix }}'"
+          else
+            echo "❌ Error: '$TOX_DIR/tox.ini' exists but is not readable"
+          fi
+          exit 1
+        fi
+
+        echo "✅ path_prefix '${{ inputs.path_prefix }}'" \
+             "is valid and contains tox.ini"
+
+        # Validate pipx is available
+        if ! command -v pipx &> /dev/null; then
+            echo "❌ Error: pipx is not available on this runner"
+            echo "pipx is required to run tox in an isolated environment"
+            echo "GitHub-hosted runners include pipx by default"
+            exit 1
+        fi
+
+    - name: 'Setup Python'
+      id: setup-python
+      # yamllint disable-line rule:line-length
+      uses: actions/setup-python@0a5c61591373683505ea898e09a3ea4f39ef2b9c # v5.0.0
+      with:
+        python-version: ${{ inputs.python-version }}
+        python-version-file: ${{ inputs.python-version-file }}
+
+    - name: 'Run pre-build-script'
+      if: ${{ inputs.pre-build-script != '' }}
+      shell: bash
+      run: |
+        # Run pre-build-script
+        SCRIPT_PATH="${{ inputs.pre-build-script }}"
+
+        echo "🔍 Validating pre-build script: $SCRIPT_PATH"
+
+        # Security: Prevent path traversal
+        if [[ "$SCRIPT_PATH" == *".."* ]]; then
+          echo "❌ Error: Path traversal detected in script path"
+          exit 1
+        fi
+
+        # Security: Only run shell scripts with .sh filename suffix
+        if [[ "$SCRIPT_PATH" != *.sh ]]; then
+          echo "❌ Error: Only .sh scripts are allowed"
+          echo "Provided: $SCRIPT_PATH"
+          exit 1
+        fi
+
+        # Security: Restrict to repository-owned scripts
+        REPO_ROOT="${GITHUB_WORKSPACE}"
+        FULL_PATH="$REPO_ROOT/$SCRIPT_PATH"
+
+        # Validate path is within repository (prevent symlink attacks)
+        CANONICAL_PATH=$(readlink -f "$FULL_PATH" 2>/dev/null || \
+                         realpath "$FULL_PATH" 2>/dev/null)
+
+        if [[ -z "$CANONICAL_PATH" ]]; then
+          echo "❌ Error: Failed to resolve canonical path for script"
+          echo "This system may not support readlink or realpath commands"
+          exit 1
+        fi
+
+        if [[ "$CANONICAL_PATH" != "$REPO_ROOT"* ]]; then
+          echo "❌ Error: Script must be within repository"
+          exit 1
+        fi
+        if [[ ! -f "$CANONICAL_PATH" ]]; then
+          echo "❌ Error: Script not found at: $SCRIPT_PATH"
+          exit 1
+        fi
+        # For security reasons, we require the script to be marked executable
+        if [[ ! -x "$CANONICAL_PATH" ]]; then
+          echo "❌ Error: Script not marked executable at: $SCRIPT_PATH"
+          exit 1
+        fi
+        echo "✅ Script validation passed"
+
+        # Run the script
+        "$CANONICAL_PATH"
+
+    - name: 'Detect dependency management tool'
+      id: detect-deps
+      shell: bash
+      run: |
+        # Detect dependency management tool
+        cd "${GITHUB_WORKSPACE}/${{ inputs.path_prefix }}" || exit 1
+
+        echo "🔍 Detecting Python dependency management tool"
+        # Priority order for detection and installation
+        DETECTED_BACKEND=""
+
+        if [[ -f "uv.lock" ]]; then
+          echo "✅ Detected uv with uv.lock"
+          DETECTED_BACKEND="uv"
+        elif [[ -f "pdm.lock" ]]; then
+          echo "✅ Detected PDM with pdm.lock"
+          DETECTED_BACKEND="pdm"
+        elif [[ -f "poetry.lock" ]]; then
+          echo "✅ Detected Poetry with poetry.lock"
+          DETECTED_BACKEND="poetry"
+        elif [[ -f "Pipfile.lock" ]]; then
+          echo "✅ Detected Pipenv with Pipfile.lock"
+          DETECTED_BACKEND="pipenv"
+        elif [[ -f "requirements.txt" ]] && \
+             (grep -q "==" requirements.txt 2>/dev/null || \
+              [[ -f "requirements.in" ]]); then
+          echo "✅ Detected pip-tools with requirements.txt"
+          DETECTED_BACKEND="pip-tools"
+        elif [[ -f "requirements.txt" ]]; then
+          echo "⚠️ Detected plain pip with requirements.txt"
+          DETECTED_BACKEND="pip"
+        elif [[ -f "pyproject.toml" ]]; then
+          echo "⚠️ Detected pyproject.toml without lock file"
+          DETECTED_BACKEND="pip"
+        else
+          echo "ℹ️ No dependency files found"
+          DETECTED_BACKEND="none"
+        fi
+
+        echo "Note: tox manages dependencies in isolated environments"
+        echo "build-backend=$DETECTED_BACKEND" >> "$GITHUB_OUTPUT"
+        # Add to GitHub Step Summary
+        {
+          echo "## 🔧 Build Backend Detection"
+          echo ""
+          echo "**Detected Tool:** \`$DETECTED_BACKEND\`"
+          echo ""
+        } >> "$GITHUB_STEP_SUMMARY"
+
+    - name: 'Run tox'
+      shell: bash
+      env:
+        INPUT_PATH_PREFIX: ${{ inputs.path_prefix }}
+        INPUT_TOX_ENVS: ${{ inputs.tox-envs }}
+        INPUT_PARALLEL: ${{ inputs.parallel }}
+      run: |
+        # Run tox
+        path_prefix="${INPUT_PATH_PREFIX}"
+        tox_envs="${INPUT_TOX_ENVS}"
+        parallel="${INPUT_PARALLEL}"
+
+        cd "${GITHUB_WORKSPACE}/$path_prefix" || exit 1
+
+        # Python distutils module was deprecated in Python 3.10 and
+        # removed in 3.12.
+
+        # Get the actual Python version that was installed
+        INSTALLED_VERSION=$(python --version 2>&1 | cut -d' ' -f2)
+        MIN_PYTHON_VERSION='3.12'
+
+        # Extract major.minor versions (e.g., 3.12.3 -> major=3, minor=12)
+        INP_MAJOR=$(echo "$INSTALLED_VERSION" | cut -d'.' -f1)
+        INP_MINOR=$(echo "$INSTALLED_VERSION" | cut -d'.' -f2)
+        MIN_MAJOR=$(echo "$MIN_PYTHON_VERSION" | cut -d'.' -f1)
+        MIN_MINOR=$(echo "$MIN_PYTHON_VERSION" | cut -d'.' -f2)
+
+        # Validate that version components are numeric
+        if ! [[ "$INP_MAJOR" =~ ^[0-9]+$ ]] || \
+           ! [[ "$INP_MINOR" =~ ^[0-9]+$ ]]; then
+            echo "❌ Error: Unable to parse Python version: '$INSTALLED_VERSION'"
+            echo "Expected format: X.Y.Z (e.g., 3.12.1)"
+            exit 1
+        fi
+
+        if (( INP_MAJOR > MIN_MAJOR )) || \
+           { (( INP_MAJOR == MIN_MAJOR )) && \
+             (( INP_MINOR >= MIN_MINOR )); }; then
+            # For Python 3.12+, upgrade pip and setuptools to ensure
+            # compatibility
+            # with packaging tools that no longer rely on distutils.
+            pip install --upgrade pip setuptools
+        fi
+
+        TOX_OPTIONS_LIST=''
+        if [[ -n "$tox_envs" ]]; then
+            TOX_OPTIONS_LIST=" -e $tox_envs"
+        fi
+
+        # $TOX_OPTIONS_LIST are intentionally not surrounded by quotes
+        # to correctly pass options to tox
+        # shellcheck disable=SC2086
+        pipx run --python "${{ steps.setup-python.outputs.python-path }}" \
+        tox --parallel "$parallel" --parallel-live $TOX_OPTIONS_LIST

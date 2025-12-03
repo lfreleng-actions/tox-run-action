@@ -235,8 +235,13 @@ runs:
             TOX_OPTIONS_LIST=" -e $tox_envs"
         fi
 
-        # $TOX_OPTIONS_LIST are intentionally not surrounded by quotes
-        # to correctly pass options to tox
+        PARALLEL_OPTIONS=''
+        if [[ -n "$parallel" ]]; then
+            PARALLEL_OPTIONS=" --parallel $parallel --parallel-live"
+        fi
+
+        # $TOX_OPTIONS_LIST and $PARALLEL_OPTIONS are intentionally not
+        # surrounded by quotes to correctly pass options to tox
         # shellcheck disable=SC2086
         pipx run --python "${{ steps.setup-python.outputs.python-path }}" \
-        tox --parallel "$parallel" --parallel-live $TOX_OPTIONS_LIST
+        tox $PARALLEL_OPTIONS $TOX_OPTIONS_LIST

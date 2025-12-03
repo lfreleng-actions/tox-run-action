@@ -79,10 +79,11 @@ steps:
 
 <!-- markdownlint-disable MD013 -->
 
-| Name          | Description                                          |
-| ------------- | ---------------------------------------------------- |
-| build-backend | Detected Python dependency management tool (uv, pdm, |
-|               | poetry, pipenv, pip-tools, pip, or none)             |
+| Name          | Description                                |
+| ------------- | ------------------------------------------ |
+| build-backend | Detected Python dependency management tool |
+
+Note: detected build backend values are uv, pdm, poetry, pipenv, pip-tools, pip, or none
 
 <!-- markdownlint-enable MD013 -->
 

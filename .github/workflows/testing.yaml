@@ -52,7 +52,14 @@ jobs:
         uses: ./
         with:
           path_prefix: 'test-python-project'
-          python-version: '3.12'
+          # Provision every interpreter the tox-envs below require. The
+          # action forwards this to actions/setup-python, which installs
+          # each version and places it on PATH so tox can resolve py311
+          # and py312. A single version here leaves py311 unresolved on
+          # runner images that no longer ship Python 3.11 by default.
+          python-version: |
+            3.11
+            3.12
           tox-envs: 'py311,py312'
           parallel: 'auto'
 

@@ -40,13 +40,15 @@ runs:
   steps:
     - name: 'Validate action/environment'
       shell: bash
+      env:
+        INPUT_PATH_PREFIX: ${{ inputs.path_prefix }}
       run: |
         # Validate action/environment
-        TOX_DIR="${GITHUB_WORKSPACE}/${{ inputs.path_prefix }}"
+        TOX_DIR="${GITHUB_WORKSPACE}/${INPUT_PATH_PREFIX}"
         echo "🔍 Validating tox directory: $TOX_DIR"
 
         if [[ ! -d "$TOX_DIR" ]]; then
-          echo "Error: specified path_prefix '${{ inputs.path_prefix }}'" \
+          echo "Error: specified path_prefix '${INPUT_PATH_PREFIX}'" \
                "does not exist ❌"
           echo "Current working directory: $(pwd)"
           echo "Available directories:"
@@ -57,14 +59,14 @@ runs:
         # Check for tox.ini file existence and readability
         if [[ ! -f "$TOX_DIR/tox.ini" || ! -r "$TOX_DIR/tox.ini" ]]; then
           if [[ ! -f "$TOX_DIR/tox.ini" ]]; then
-            echo "❌ Error: tox.ini not found in '${{ inputs.path_prefix }}'"
+            echo "❌ Error: tox.ini not found in '${INPUT_PATH_PREFIX}'"
           else
             echo "❌ Error: '$TOX_DIR/tox.ini' exists but is not readable"
           fi
           exit 1
         fi
 
-        echo "✅ path_prefix '${{ inputs.path_prefix }}'" \
+        echo "✅ path_prefix '${INPUT_PATH_PREFIX}'" \
              "is valid and contains tox.ini"
 
         # Validate pipx is available
@@ -86,9 +88,11 @@ runs:
     - name: 'Run pre-build-script'
       if: ${{ inputs.pre-build-script != '' }}
       shell: bash
+      env:
+        INPUT_PRE_BUILD_SCRIPT: ${{ inputs.pre-build-script }}
       run: |
         # Run pre-build-script
-        SCRIPT_PATH="${{ inputs.pre-build-script }}"
+        SCRIPT_PATH="${INPUT_PRE_BUILD_SCRIPT}"
 
         echo "🔍 Validating pre-build script: $SCRIPT_PATH"
 
@@ -140,9 +144,11 @@ runs:
     - name: 'Detect dependency management tool'
       id: detect-deps
       shell: bash
+      env:
+        INPUT_PATH_PREFIX: ${{ inputs.path_prefix }}
       run: |
         # Detect dependency management tool
-        cd "${GITHUB_WORKSPACE}/${{ inputs.path_prefix }}" || exit 1
+        cd "${GITHUB_WORKSPACE}/${INPUT_PATH_PREFIX}" || exit 1
 
         echo "🔍 Detecting Python dependency management tool"
         # Priority order for detection and installation

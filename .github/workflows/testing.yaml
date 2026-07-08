@@ -41,10 +41,13 @@ jobs:
 
       - name: 'Checkout this repository'
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: 'Checkout test Python project'
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          persist-credentials: false
           repository: 'lfreleng-actions/test-python-project'
           path: 'test-python-project'
 
@@ -77,10 +80,13 @@ jobs:
 
       - name: 'Checkout this repository'
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: 'Checkout test Python project'
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          persist-credentials: false
           repository: 'lfreleng-actions/test-python-project'
           path: 'test-python-project'
 
@@ -106,10 +112,13 @@ jobs:
 
       - name: 'Checkout this repository'
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: 'Checkout test Python project'
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          persist-credentials: false
           repository: 'lfreleng-actions/test-python-project'
           path: 'test-python-project'
 
@@ -154,6 +163,8 @@ jobs:
 
       - name: 'Checkout this repository'
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: 'Test missing tox.ini handling'
         uses: ./
@@ -183,10 +194,13 @@ jobs:
 
       - name: 'Checkout this repository'
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: 'Checkout test Python project'
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          persist-credentials: false
           repository: 'lfreleng-actions/test-python-project'
           path: 'test-python-project'
 

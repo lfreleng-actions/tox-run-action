@@ -198,6 +198,8 @@ runs:
         INPUT_PATH_PREFIX: ${{ inputs.path_prefix }}
         INPUT_TOX_ENVS: ${{ inputs.tox-envs }}
         INPUT_PARALLEL: ${{ inputs.parallel }}
+        # yamllint disable-line rule:line-length
+        STEPS_SETUP_PYTHON_OUTPUTS_PYTHON_PATH: ${{ steps.setup-python.outputs.python-path }}
       run: |
         # Run tox
         path_prefix="${INPUT_PATH_PREFIX}"
@@ -249,5 +251,5 @@ runs:
         # $TOX_OPTIONS_LIST and $PARALLEL_OPTIONS are intentionally not
         # surrounded by quotes to correctly pass options to tox
         # shellcheck disable=SC2086
-        pipx run --python "${{ steps.setup-python.outputs.python-path }}" \
+        pipx run --python "${STEPS_SETUP_PYTHON_OUTPUTS_PYTHON_PATH}" \
         tox $PARALLEL_OPTIONS $TOX_OPTIONS_LIST

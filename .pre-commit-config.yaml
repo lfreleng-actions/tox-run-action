@@ -3,6 +3,7 @@
 # SPDX-FileCopyrightText: 2025 The Linux Foundation
 
 ci:
+  autofix_prs: false
   # Workflow linter requires network access, blocked in pre-commit.ci
   skip: [gha-workflow-linter]
   autofix_commit_msg: |

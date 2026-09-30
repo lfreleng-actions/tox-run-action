@@ -129,7 +129,8 @@ environments. The action does not install dependencies directly.
 - Tox handles package building internally when `tox.ini` sets
   `isolated_build = True`
 - When `tox-envs` is not specified, tox will run its default environments
-- The `pre-build-script` path is relative to the repository root
+- The `pre-build-script` path is relative to the repository root, and must
+  resolve, after following any symlinks, to a file inside the workspace
 - Parallel execution accepts values like 'auto', 'off', or a specific number
 - The action validates that `path_prefix` exists and contains `tox.ini` before proceeding
 - The action changes to the `path_prefix` before executing tox commands

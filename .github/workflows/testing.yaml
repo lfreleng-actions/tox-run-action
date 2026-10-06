@@ -134,6 +134,30 @@ jobs:
           fi
           echo "Pre-build script verification passed"
 
+  test-pre-build-script-containment:
+    name: 'Test pre-build script containment'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 5
+    steps:
+      # yamllint disable-line rule:line-length
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+
+      - name: 'Checkout repository'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Runs the action's pre-build-script step, extracted from
+      # action.yaml, against symlinks that leave the workspace.
+      # ubuntu-latest ships mikefarah yq v4, which the test requires.
+      - name: 'Run pre-build script containment tests'
+        shell: bash
+        run: tests/pre-build-script.sh
+
   test-error-handling:
     name: 'Test error handling'
     runs-on: ubuntu-latest

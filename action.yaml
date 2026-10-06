@@ -109,8 +109,17 @@ runs:
           exit 1
         fi
 
-        # Security: Restrict to repository-owned scripts
-        REPO_ROOT="${GITHUB_WORKSPACE}"
+        # Security: Restrict to repository-owned scripts. Resolve the
+        # workspace the same way as the script below, so a workspace
+        # reached through a symlink still contains its own scripts.
+        REPO_ROOT=$(readlink -f "${GITHUB_WORKSPACE}" 2>/dev/null || \
+                    realpath "${GITHUB_WORKSPACE}" 2>/dev/null) || true
+
+        if [[ -z "$REPO_ROOT" ]]; then
+          echo "❌ Error: Failed to resolve canonical path for workspace"
+          echo "This system may not support readlink or realpath commands"
+          exit 1
+        fi
         FULL_PATH="$REPO_ROOT/$SCRIPT_PATH"
 
         # Validate path is within repository (prevent symlink attacks)
@@ -123,7 +132,9 @@ runs:
           exit 1
         fi
 
-        if [[ "$CANONICAL_PATH" != "$REPO_ROOT"* ]]; then
+        # The separator stops a sibling such as "$REPO_ROOT-other" from
+        # passing as a prefix match
+        if [[ "$CANONICAL_PATH" != "$REPO_ROOT"/* ]]; then
           echo "❌ Error: Script must be within repository"
           exit 1
         fi

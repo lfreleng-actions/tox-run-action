@@ -34,16 +34,27 @@ outputs:
     description: "The detected Python dependency management tool"
     # Supported: uv, pdm, poetry, pipenv, pip-tools, pip, or none
     value: ${{ steps.detect-deps.outputs.build-backend }}
+  error:
+    description: 'Reason input validation stopped the action, or empty'
+    # Composite outputs are evaluated after a failed step too
+    value: ${{ steps.validate.outputs.error || steps.pre-build.outputs.error }}
 
 runs:
   using: 'composite'
   steps:
     - name: 'Validate action/environment'
+      id: validate
       shell: bash
       env:
         INPUT_PATH_PREFIX: ${{ inputs.path_prefix }}
       run: |
         # Validate action/environment
+        # fail <reason>: stop, publishing <reason> as the error output
+        fail() {
+          echo "error=$1" >> "$GITHUB_OUTPUT"
+          exit 1
+        }
+
         TOX_DIR="${GITHUB_WORKSPACE}/${INPUT_PATH_PREFIX}"
         echo "🔍 Validating tox directory: $TOX_DIR"
 
@@ -53,17 +64,17 @@ runs:
           echo "Current working directory: $(pwd)"
           echo "Available directories:"
           ls -la "${GITHUB_WORKSPACE}" || echo "Cannot list workspace contents"
-          exit 1
+          fail missing-path-prefix
         fi
 
         # Check for tox.ini file existence and readability
-        if [[ ! -f "$TOX_DIR/tox.ini" || ! -r "$TOX_DIR/tox.ini" ]]; then
-          if [[ ! -f "$TOX_DIR/tox.ini" ]]; then
-            echo "❌ Error: tox.ini not found in '${INPUT_PATH_PREFIX}'"
-          else
-            echo "❌ Error: '$TOX_DIR/tox.ini' exists but is not readable"
-          fi
-          exit 1
+        if [[ ! -f "$TOX_DIR/tox.ini" ]]; then
+          echo "❌ Error: tox.ini not found in '${INPUT_PATH_PREFIX}'"
+          fail missing-tox-ini
+        fi
+        if [[ ! -r "$TOX_DIR/tox.ini" ]]; then
+          echo "❌ Error: '$TOX_DIR/tox.ini' exists but is not readable"
+          fail unreadable-tox-ini
         fi
 
         echo "✅ path_prefix '${INPUT_PATH_PREFIX}'" \
@@ -74,7 +85,7 @@ runs:
             echo "❌ Error: pipx is not available on this runner"
             echo "pipx is required to run tox in an isolated environment"
             echo "GitHub-hosted runners include pipx by default"
-            exit 1
+            fail missing-pipx
         fi
 
     - name: 'Setup Python'
@@ -86,12 +97,19 @@ runs:
         python-version-file: ${{ inputs.python-version-file }}
 
     - name: 'Run pre-build-script'
+      id: pre-build
       if: ${{ inputs.pre-build-script != '' }}
       shell: bash
       env:
         INPUT_PRE_BUILD_SCRIPT: ${{ inputs.pre-build-script }}
       run: |
         # Run pre-build-script
+        # fail <reason>: stop, publishing <reason> as the error output
+        fail() {
+          echo "error=$1" >> "$GITHUB_OUTPUT"
+          exit 1
+        }
+
         SCRIPT_PATH="${INPUT_PRE_BUILD_SCRIPT}"
 
         echo "🔍 Validating pre-build script: $SCRIPT_PATH"
@@ -99,14 +117,14 @@ runs:
         # Security: Prevent path traversal
         if [[ "$SCRIPT_PATH" == *".."* ]]; then
           echo "❌ Error: Path traversal detected in script path"
-          exit 1
+          fail script-path-traversal
         fi
 
         # Security: Only run shell scripts with .sh filename suffix
         if [[ "$SCRIPT_PATH" != *.sh ]]; then
           echo "❌ Error: Only .sh scripts are allowed"
           echo "Provided: $SCRIPT_PATH"
-          exit 1
+          fail script-not-sh
         fi
 
         # Security: Restrict to repository-owned scripts. Resolve the
@@ -118,7 +136,7 @@ runs:
         if [[ -z "$REPO_ROOT" ]]; then
           echo "❌ Error: Failed to resolve canonical path for workspace"
           echo "This system may not support readlink or realpath commands"
-          exit 1
+          fail workspace-unresolved
         fi
         FULL_PATH="$REPO_ROOT/$SCRIPT_PATH"
 
@@ -129,28 +147,29 @@ runs:
         if [[ -z "$CANONICAL_PATH" ]]; then
           echo "❌ Error: Failed to resolve canonical path for script"
           echo "This system may not support readlink or realpath commands"
-          exit 1
+          fail script-unresolved
         fi
 
         # The separator stops a sibling such as "$REPO_ROOT-other" from
         # passing as a prefix match
         if [[ "$CANONICAL_PATH" != "$REPO_ROOT"/* ]]; then
           echo "❌ Error: Script must be within repository"
-          exit 1
+          fail script-outside-workspace
         fi
         if [[ ! -f "$CANONICAL_PATH" ]]; then
           echo "❌ Error: Script not found at: $SCRIPT_PATH"
-          exit 1
+          fail script-not-found
         fi
         # For security reasons, we require the script to be marked executable
         if [[ ! -x "$CANONICAL_PATH" ]]; then
           echo "❌ Error: Script not marked executable at: $SCRIPT_PATH"
-          exit 1
+          fail script-not-executable
         fi
         echo "✅ Script validation passed"
 
-        # Run the script
-        "$CANONICAL_PATH"
+        # Run the script. Only validation may set this step's outputs,
+        # so a script cannot report a validation error.
+        GITHUB_OUTPUT=/dev/null "$CANONICAL_PATH"
 
     - name: 'Detect dependency management tool'
       id: detect-deps

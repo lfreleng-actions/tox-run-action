@@ -159,30 +159,117 @@ jobs:
         run: tests/pre-build-script.sh
 
   test-error-handling:
-    name: 'Test error handling'
+    name: 'Test error handling (${{ matrix.case }})'
     runs-on: ubuntu-latest
     permissions:
       contents: read
     timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      # Each case breaks one input and leaves the others valid, so only
+      # the check under test can reject it. Unset inputs default to the
+      # test project and no pre-build script.
+      matrix:
+        include:
+          - case: 'missing path_prefix directory'
+            path_prefix: 'nonexistent-dir'
+            error: 'missing-path-prefix'
+          - case: 'missing tox.ini'
+            path_prefix: 'no-tox-ini'
+            error: 'missing-tox-ini'
+          - case: 'unreadable tox.ini'
+            path_prefix: 'unreadable-tox-ini'
+            error: 'unreadable-tox-ini'
+          - case: 'pipx not available'
+            error: 'missing-pipx'
+          - case: 'pre-build script path traversal'
+            script: 'test-python-project/../prebuild.sh'
+            error: 'script-path-traversal'
+          - case: 'pre-build script without .sh suffix'
+            script: 'prebuild'
+            error: 'script-not-sh'
+          - case: 'pre-build script outside the workspace'
+            script: 'outside.sh'
+            error: 'script-outside-workspace'
+          - case: 'missing pre-build script'
+            script: 'missing.sh'
+            error: 'script-not-found'
+          - case: 'pre-build script not executable'
+            script: 'noexec.sh'
+            error: 'script-not-executable'
     steps:
       # yamllint disable-line rule:line-length
       - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
           egress-policy: audit
 
-      - name: 'Test missing tox.ini handling'
-        uses: $/
-        id: missing-tox
-        continue-on-error: true
+      - name: 'Checkout test Python project'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          path_prefix: 'nonexistent-dir'
+          persist-credentials: false
+          repository: 'lfreleng-actions/test-python-project'
+          path: 'test-python-project'
 
-      - name: 'Verify error handling'
-        if: steps.missing-tox.outcome == 'success'
+      # Every script passes all checks but the one its case breaks, and
+      # fails if run, so one that gets past validation cannot pass.
+      - name: 'Create test fixtures'
         shell: bash
         run: |
-          echo 'Error: Action should have failed with missing tox.ini'
-          exit 1
+          # Create test fixtures
+          make_script() {
+            printf '#!/bin/sh\necho "%s ran past validation"\nexit 1\n' \
+              "$1" > "$1"
+            chmod +x "$1"
+          }
+          mkdir no-tox-ini
+          # The runner user is not root, so mode 000 denies it reading
+          mkdir unreadable-tox-ini
+          touch unreadable-tox-ini/tox.ini
+          chmod 000 unreadable-tox-ini/tox.ini
+          make_script prebuild.sh
+          make_script prebuild
+          make_script "${RUNNER_TEMP}/outside.sh"
+          ln -s "${RUNNER_TEMP}/outside.sh" outside.sh
+          make_script noexec.sh
+          chmod -x noexec.sh
+
+      # The runner is discarded with the job, so nothing restores pipx
+      - name: 'Remove pipx from PATH'
+        if: matrix.error == 'missing-pipx'
+        shell: bash
+        run: |
+          # Remove pipx from PATH
+          mapfile -t found < <(type -aP pipx)
+          for pipx_path in "${found[@]}"; do
+            sudo mv "$pipx_path" "$pipx_path.removed"
+          done
+          if type -P pipx; then
+            echo '::error::pipx is still on PATH'
+            exit 1
+          fi
+
+      - name: 'Test ${{ matrix.case }}'
+        uses: $/
+        id: action
+        continue-on-error: true
+        with:
+          path_prefix: ${{ matrix.path_prefix || 'test-python-project' }}
+          pre-build-script: ${{ matrix.script }}
+
+      - name: 'Verify the action failed with error=${{ matrix.error }}'
+        shell: bash
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+          ERROR: ${{ steps.action.outputs.error }}
+          EXPECTED: ${{ matrix.error }}
+        run: |
+          # Verify the action failed for the expected reason
+          if [[ "$OUTCOME" != 'failure' || "$ERROR" != "$EXPECTED" ]]; then
+            echo "::error::Wanted failure with error=$EXPECTED," \
+                 "got $OUTCOME with error=$ERROR"
+            exit 1
+          fi
+          echo "✅ Action failed with error=$EXPECTED"
 
   test-empty-parallel:
     name: 'Test with empty parallel parameter'

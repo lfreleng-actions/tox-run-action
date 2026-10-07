@@ -14,7 +14,8 @@
 # of being skipped.
 #
 # The step executes the script once validation passes, so every script
-# here only records that it ran; a rejected script must leave no record.
+# here only records that it ran; a rejected script must leave no record,
+# and the step must publish why it rejected it as its error output.
 #
 # Usage: tests/pre-build-script.sh    (needs mikefarah yq v4 and bash)
 
@@ -28,9 +29,10 @@ trap 'rm -rf -- "${work}"' EXIT
 step_name='Run pre-build-script'
 script="${work}/step.sh"
 ran="${work}/ran"
+output="${work}/output"
 cases=0
 failures=0
-match=''
+reason=''
 path="${PATH}"
 
 if ! yq --version 2> /dev/null | grep -q 'mikefarah'; then
@@ -56,24 +58,29 @@ if grep -qF -- "${marker}" "${script}"; then
   exit 2
 fi
 
-# make_script <path> <id>: an executable script that records <id>.
+# make_script <path> <id>: an executable script that records <id>, and
+# tries to set the step's error output, which the step must not allow.
 make_script() {
   mkdir -p -- "$(dirname -- "$1")"
-  printf '#!/bin/sh\necho %s >> "%s"\n' "$2" "${ran}" > "$1"
+  printf '#!/bin/sh\necho %s >> "%s"\necho error=%s >> %s\n' \
+    "$2" "${ran}" "$2" "\"\$GITHUB_OUTPUT\"" > "$1"
   chmod +x "$1"
 }
 
 # expect <pass|fail> <label> <workspace> <input> <id>: runs the step as
 # the runner would, from the workspace. A pass must have executed the
-# script recording <id>; a fail must have executed nothing and, when
-# $match is set, printed it, so a case rejected for another reason does
-# not count as rejected. $path is the PATH the step sees.
+# script recording <id> and published no error; a fail must have
+# executed nothing and published error=$reason, so a case rejected for
+# another reason does not count as rejected. $path is the PATH the step
+# sees.
 expect() {
   local want="$1" label="$2" ws="$3" input="$4" id="$5" got ok=1
   cases=$((cases + 1))
   : > "${ran}"
+  : > "${output}"
   if (cd -- "${ws}" && env -i PATH="${path}" HOME="${HOME}" \
-    GITHUB_WORKSPACE="${ws}" INPUT_PRE_BUILD_SCRIPT="${input}" \
+    GITHUB_WORKSPACE="${ws}" GITHUB_OUTPUT="${output}" \
+    INPUT_PRE_BUILD_SCRIPT="${input}" \
     bash --noprofile --norc -eo pipefail "${script}") \
     > "${work}/out" 2>&1; then
     got=pass
@@ -83,19 +90,20 @@ expect() {
   [ "${got}" = "${want}" ] || ok=0
   if [ "${want}" = pass ]; then
     grep -qxF -- "${id}" "${ran}" || ok=0
+    ! grep -q '^error=' "${output}" || ok=0
   else
     [ ! -s "${ran}" ] || ok=0
-    [ -z "${match}" ] || grep -qF -- "${match}" "${work}/out" || ok=0
+    grep -qxF -- "error=${reason}" "${output}" || ok=0
   fi
   if [ "${ok}" = 1 ]; then
     printf '  ok    %s\n' "${label}"
   else
     failures=$((failures + 1))
     printf '  FAIL  %s (wanted %s, got %s%s)\n' "${label}" "${want}" \
-      "${got}" "${match:+, expecting \"${match}\"}"
-    sed 's/^/        | /' "${work}/out" "${ran}"
+      "${got}" "${reason:+, expecting error=${reason}}"
+    sed 's/^/        | /' "${work}/out" "${ran}" "${output}"
   fi
-  match=''
+  reason=''
   path="${PATH}"
 }
 
@@ -114,19 +122,19 @@ echo '== pre-build-script containment'
 expect pass 'script inside the workspace' "${ws}" 'scripts/ok.sh' ok
 expect pass 'symlink to a script inside the workspace' \
   "${ws}" 'inside.sh' ok
-match='Script must be within repository'
+reason='script-outside-workspace'
 expect fail 'file symlink into a sibling directory' \
   "${ws}" 'sibling.sh' sibling
-match='Script must be within repository'
+reason='script-outside-workspace'
 expect fail 'directory symlink into a sibling directory' \
   "${ws}" 'linkdir/x.sh' sibling
-match='Script must be within repository'
+reason='script-outside-workspace'
 expect fail 'symlink to an unrelated directory' \
   "${ws}" 'outside.sh' outside
 
 # Neither tool resolves a path through a missing directory, and the
 # step must say so rather than stop at the failed assignment.
-match='Failed to resolve canonical path for script'
+reason='script-unresolved'
 expect fail 'script under a missing directory' \
   "${ws}" 'missing/x.sh' none
 
@@ -148,7 +156,7 @@ path="${stubs}:${PATH}"
 expect pass 'realpath fallback: script inside the workspace' \
   "${ws}" 'scripts/ok.sh' ok
 path="${stubs}:${PATH}"
-match='Script must be within repository'
+reason='script-outside-workspace'
 expect fail 'realpath fallback: symlink into a sibling directory' \
   "${ws}" 'sibling.sh' sibling
 
@@ -156,7 +164,7 @@ expect fail 'realpath fallback: symlink into a sibling directory' \
 # and say why, rather than run the script.
 cp "${stubs}/readlink" "${stubs}/realpath"
 path="${stubs}:${PATH}"
-match='Failed to resolve canonical path for workspace'
+reason='workspace-unresolved'
 expect fail 'neither readlink -f nor realpath resolves' \
   "${ws}" 'scripts/ok.sh' ok
 

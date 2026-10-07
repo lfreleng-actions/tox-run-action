@@ -124,6 +124,12 @@ match='Script must be within repository'
 expect fail 'symlink to an unrelated directory' \
   "${ws}" 'outside.sh' outside
 
+# Neither tool resolves a path through a missing directory, and the
+# step must say so rather than stop at the failed assignment.
+match='Failed to resolve canonical path for script'
+expect fail 'script under a missing directory' \
+  "${ws}" 'missing/x.sh' none
+
 # Self-hosted runners may reach the workspace through a symlink; the
 # script's resolved path must still count as inside it.
 mkdir -p "${work}/real"

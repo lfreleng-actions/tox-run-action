@@ -124,7 +124,7 @@ runs:
 
         # Validate path is within repository (prevent symlink attacks)
         CANONICAL_PATH=$(readlink -f "$FULL_PATH" 2>/dev/null || \
-                         realpath "$FULL_PATH" 2>/dev/null)
+                         realpath "$FULL_PATH" 2>/dev/null) || true
 
         if [[ -z "$CANONICAL_PATH" ]]; then
           echo "❌ Error: Failed to resolve canonical path for script"

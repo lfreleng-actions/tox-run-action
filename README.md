@@ -79,11 +79,30 @@ steps:
 
 <!-- markdownlint-disable MD013 -->
 
-| Name          | Description                                |
-| ------------- | ------------------------------------------ |
-| build-backend | Detected Python dependency management tool |
+| Name          | Description                                          |
+| ------------- | ---------------------------------------------------- |
+| build-backend | Detected Python dependency management tool           |
+| error         | Reason input validation stopped the action, or empty |
 
 Note: detected build backend values are uv, pdm, poetry, pipenv, pip-tools, pip, or none
+
+The action fails at the first input check that does not pass, and sets
+`error` to identify that check. Read it from a step with
+`continue-on-error: true` to tell one failure from another:
+
+| Check                                         | error                    |
+| --------------------------------------------- | ------------------------ |
+| `path_prefix` directory missing               | missing-path-prefix      |
+| `tox.ini` missing from `path_prefix`          | missing-tox-ini          |
+| `tox.ini` not readable                        | unreadable-tox-ini       |
+| `pipx` not available                          | missing-pipx             |
+| `pre-build-script` path contains `..`         | script-path-traversal    |
+| `pre-build-script` name lacks `.sh` suffix    | script-not-sh            |
+| Workspace path does not resolve               | workspace-unresolved     |
+| `pre-build-script` path does not resolve      | script-unresolved        |
+| `pre-build-script` resolves outside workspace | script-outside-workspace |
+| `pre-build-script` file missing               | script-not-found         |
+| `pre-build-script` not executable             | script-not-executable    |
 
 <!-- markdownlint-enable MD013 -->
 

@@ -18,11 +18,10 @@ execution, and custom build scripts.
 
 This action requires:
 
-- **pipx**: Pre-installed on all GitHub-hosted runners (ubuntu, macos, windows)
 - **tox.ini**: Must exist in the project directory
 
-For self-hosted runners, ensure you install `pipx`. The action checks for
-`pipx` availability before running.
+The action installs tox itself, from a hashed lock file, so the runner
+needs no tox or `pipx` of its own.
 
 ## Usage Example
 
@@ -95,7 +94,6 @@ The action fails at the first input check that does not pass, and sets
 | `path_prefix` directory missing               | missing-path-prefix      |
 | `tox.ini` missing from `path_prefix`          | missing-tox-ini          |
 | `tox.ini` not readable                        | unreadable-tox-ini       |
-| `pipx` not available                          | missing-pipx             |
 | `pre-build-script` path contains `..`         | script-path-traversal    |
 | `pre-build-script` name lacks `.sh` suffix    | script-not-sh            |
 | Workspace path does not resolve               | workspace-unresolved     |
@@ -120,8 +118,9 @@ The action performs the following steps:
    `build-backend`
 5. **Python Compatibility**: For Python 3.12+, ensures `setuptools` upgrade
    due to `distutils` removal
-6. **Tox Execution**: Runs tox with the specified environments and parallel
-   settings using `pipx run tox`
+6. **Tox Execution**: Installs tox from `requirements/tox.txt` into a
+   virtual environment on the configured Python, then runs it with the
+   specified environments and parallel settings
 
 The action automatically handles:
 
@@ -144,7 +143,11 @@ environments. The action does not install dependencies directly.
 
 ## Notes
 
-- The action uses `pipx` to run `tox` in an isolated environment
+- The action installs tox from `requirements/tox.txt`, a lock with a
+  hash for every package, into a virtual environment of its own. The
+  lock picks the newest tox that supports the configured Python, so
+  Python 3.8 to 3.10 get an older tox than 3.11 and later. Dependabot
+  keeps it current; to refresh it by hand, run the command in its header
 - Tox handles package building internally when `tox.ini` sets
   `isolated_build = True`
 - When `tox-envs` is not specified, tox will run its default environments

@@ -12,3 +12,12 @@ updates:
       prefix: "Chore"
     cooldown:
       default-days: 7
+  # requirements/tox.txt, the hashed tox lock the action installs
+  - package-ecosystem: "pip"
+    directory: "/requirements"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "Chore"
+    cooldown:
+      default-days: 7

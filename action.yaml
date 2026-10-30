@@ -80,14 +80,6 @@ runs:
         echo "✅ path_prefix '${INPUT_PATH_PREFIX}'" \
              "is valid and contains tox.ini"
 
-        # Validate pipx is available
-        if ! command -v pipx &> /dev/null; then
-            echo "❌ Error: pipx is not available on this runner"
-            echo "pipx is required to run tox in an isolated environment"
-            echo "GitHub-hosted runners include pipx by default"
-            fail missing-pipx
-        fi
-
     - name: 'Setup Python'
       id: setup-python
       # yamllint disable-line rule:line-length
@@ -268,6 +260,22 @@ runs:
             pip install --upgrade pip setuptools
         fi
 
+        # Install tox from the hashed lock, on the Python set up above,
+        # into a virtual environment of its own. A bare install would
+        # take whatever tox PyPI served on the day. -I keeps the project
+        # directory, and PYTHONPATH, off sys.path, so a local venv.py or
+        # pip.py cannot stand in for the real module.
+        tox_venv=$(mktemp -d "${RUNNER_TEMP}/tox-venv.XXXXXX")
+        "${STEPS_SETUP_PYTHON_OUTPUTS_PYTHON_PATH}" -I -m venv "$tox_venv"
+        tox_bin="$tox_venv/bin"
+        if [[ ! -d "$tox_bin" ]]; then
+            # Windows lays a virtual environment out differently
+            tox_bin="$tox_venv/Scripts"
+        fi
+        "$tox_bin/python" -I -m pip install --quiet \
+          --disable-pip-version-check --require-hashes --only-binary=:all: \
+          -r "${GITHUB_ACTION_PATH}/requirements/tox.txt"
+
         TOX_OPTIONS_LIST=''
         if [[ -n "$tox_envs" ]]; then
             TOX_OPTIONS_LIST=" -e $tox_envs"
@@ -281,5 +289,4 @@ runs:
         # $TOX_OPTIONS_LIST and $PARALLEL_OPTIONS are intentionally not
         # surrounded by quotes to correctly pass options to tox
         # shellcheck disable=SC2086
-        pipx run --python "${STEPS_SETUP_PYTHON_OUTPUTS_PYTHON_PATH}" \
-        tox $PARALLEL_OPTIONS $TOX_OPTIONS_LIST
+        "$tox_bin/tox" $PARALLEL_OPTIONS $TOX_OPTIONS_LIST

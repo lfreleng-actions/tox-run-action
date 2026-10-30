@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 The Linux Foundation
+
+# The tox the action installs. tox.txt is the hashed lock generated from
+# this file; regenerate it with the command in its header.
+tox

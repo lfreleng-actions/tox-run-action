@@ -175,8 +175,6 @@ jobs:
           - case: 'unreadable tox.ini'
             path_prefix: 'unreadable-tox-ini'
             error: 'unreadable-tox-ini'
-          - case: 'pipx not available'
-            error: 'missing-pipx'
           - case: 'pre-build script path traversal'
             script: 'test-python-project/../prebuild.sh'
             error: 'script-path-traversal'
@@ -228,21 +226,6 @@ jobs:
           make_script noexec.sh
           chmod -x noexec.sh
 
-      # The runner is discarded with the job, so nothing restores pipx
-      - name: 'Remove pipx from PATH'
-        if: matrix.error == 'missing-pipx'
-        shell: bash
-        run: |
-          # Remove pipx from PATH
-          mapfile -t found < <(type -aP pipx)
-          for pipx_path in "${found[@]}"; do
-            sudo mv "$pipx_path" "$pipx_path.removed"
-          done
-          if type -P pipx; then
-            echo '::error::pipx is still on PATH'
-            exit 1
-          fi
-
       - name: 'Test ${{ matrix.case }}'
         uses: $/
         id: action
@@ -292,3 +275,39 @@ jobs:
           python-version: '3.11'
           tox-envs: 'py311'
           parallel: ''
+
+  test-tox-lock:
+    name: 'Test tox lock on Python ${{ matrix.python }}'
+    # Pinned, not -latest: 3.8 and 3.9 have no build for Ubuntu 26.04,
+    # and this job needs every interpreter in the matrix.
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      # requirements/tox.txt resolves a different tox per interpreter
+      # below 3.11; one from each of its branches, and the newest.
+      matrix:
+        python: ['3.8', '3.9', '3.10', '3.11', '3.14']
+    steps:
+      # yamllint disable-line rule:line-length
+      - uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
+        with:
+          egress-policy: audit
+
+      - name: 'Create minimal tox project'
+        shell: bash
+        run: |
+          # Create minimal tox project
+          mkdir lock-test
+          printf '%s\n' '[tox]' 'env_list = check' 'skipsdist = true' \
+            '[testenv:check]' 'skip_install = true' \
+            'commands = python -c "print(42)"' > lock-test/tox.ini
+
+      - name: 'Run tox installed from the lock'
+        uses: $/
+        with:
+          path_prefix: 'lock-test'
+          python-version: ${{ matrix.python }}
+          tox-envs: 'check'

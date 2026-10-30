@@ -68,8 +68,8 @@ steps:
 | path_prefix         | False    | '.'     | Directory location containing project code                      |
 | python-version      | False    | -       | Version of Python to use                                        |
 | python-version-file | False    | -       | File containing the Python version to use (e.g. pyproject.toml) |
-| tox-envs            | False    | -       | Tox envs to run on this py-version                              |
-| parallel            | False    | 'auto'  | Whether to run jobs in parallel                                 |
+| tox-envs            | False    | -       | Comma-separated tox envs to run on this py-version; no spaces   |
+| parallel            | False    | 'auto'  | Parallel processes: auto, all, a number, or off/empty           |
 | pre-build-script    | False    | -       | Path to optional pre-build script to run before tox             |
 
 <!-- markdownlint-enable MD013 -->
@@ -94,6 +94,8 @@ The action fails at the first input check that does not pass, and sets
 | `path_prefix` directory missing               | missing-path-prefix      |
 | `tox.ini` missing from `path_prefix`          | missing-tox-ini          |
 | `tox.ini` not readable                        | unreadable-tox-ini       |
+| `tox-envs` not comma-separated env names      | invalid-tox-envs         |
+| `parallel` not auto, all, off or a number     | invalid-parallel         |
 | `pre-build-script` path contains `..`         | script-path-traversal    |
 | `pre-build-script` name lacks `.sh` suffix    | script-not-sh            |
 | Workspace path does not resolve               | workspace-unresolved     |
@@ -153,7 +155,11 @@ environments. The action does not install dependencies directly.
 - When `tox-envs` is not specified, tox will run its default environments
 - The `pre-build-script` path is relative to the repository root, and must
   resolve, after following any symlinks, to a file inside the workspace
-- Parallel execution accepts values like 'auto', 'off', or a specific number
+- `tox-envs` takes environment names separated by commas, such as
+  `py311,lint`, with no spaces. The action refuses anything else, so a
+  value cannot pass tox an option such as `--notest`
+- `parallel` takes `auto`, `all` or a process count; `off` or an
+  empty value runs the environments in turn
 - The action validates that `path_prefix` exists and contains `tox.ini` before proceeding
 - The action changes to the `path_prefix` before executing tox commands
 - **Input precedence**: When both `python-version` and

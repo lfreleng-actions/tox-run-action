@@ -153,6 +153,29 @@ jobs:
         shell: bash
         run: tests/pre-build-script.sh
 
+  test-tox-inputs:
+    name: 'Test tox-envs and parallel handling'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 5
+    steps:
+      # yamllint disable-line rule:line-length
+      - uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
+        with:
+          egress-policy: audit
+
+      - name: 'Checkout repository'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Runs the validation and run steps, extracted from action.yaml,
+      # against stub interpreters that record the tox command line.
+      - name: 'Run tox-envs and parallel tests'
+        shell: bash
+        run: tests/tox-inputs.sh
+
   test-error-handling:
     name: 'Test error handling (${{ matrix.case }})'
     runs-on: ubuntu-latest
@@ -190,6 +213,12 @@ jobs:
           - case: 'pre-build script not executable'
             script: 'noexec.sh'
             error: 'script-not-executable'
+          - case: 'tox-envs carrying an option'
+            tox_envs: 'py311 --notest'
+            error: 'invalid-tox-envs'
+          - case: 'parallel carrying an option'
+            parallel: '1 --notest'
+            error: 'invalid-parallel'
     steps:
       # yamllint disable-line rule:line-length
       - uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
@@ -233,6 +262,8 @@ jobs:
         with:
           path_prefix: ${{ matrix.path_prefix || 'test-python-project' }}
           pre-build-script: ${{ matrix.script }}
+          tox-envs: ${{ matrix.tox_envs }}
+          parallel: ${{ matrix.parallel || 'auto' }}
 
       - name: 'Verify the action failed with error=${{ matrix.error }}'
         shell: bash
@@ -249,12 +280,17 @@ jobs:
           fi
           echo "✅ Action failed with error=$EXPECTED"
 
-  test-empty-parallel:
-    name: 'Test with empty parallel parameter'
+  test-serial:
+    name: "Test serial run (parallel: '${{ matrix.parallel }}')"
     runs-on: ubuntu-latest
     permissions:
       contents: read
     timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      # Both values run the environments in turn, without --parallel
+      matrix:
+        parallel: ['', 'off']
     steps:
       # yamllint disable-line rule:line-length
       - uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
@@ -268,13 +304,13 @@ jobs:
           repository: 'lfreleng-actions/test-python-project'
           path: 'test-python-project'
 
-      - name: 'Test with empty parallel parameter'
+      - name: "Test with parallel: '${{ matrix.parallel }}'"
         uses: $/
         with:
           path_prefix: 'test-python-project'
           python-version: '3.11'
           tox-envs: 'py311'
-          parallel: ''
+          parallel: ${{ matrix.parallel }}
 
   test-tox-lock:
     name: 'Test tox lock on Python ${{ matrix.python }}'

@@ -18,10 +18,12 @@ inputs:
     description: 'File containing the Python version to use (e.g. pyproject.toml)'
     required: false
   tox-envs:
-    description: 'Tox envs to run on this py-version'
+    # yamllint disable-line rule:line-length
+    description: 'Comma-separated tox envs to run on this py-version; no spaces or options'
     required: false
   parallel:
-    description: 'Whether to run jobs in parallel'
+    # yamllint disable-line rule:line-length
+    description: 'Parallel processes: auto, all, a number, or off/empty to run envs in turn'
     required: false
     default: 'auto'
   pre-build-script:
@@ -47,6 +49,8 @@ runs:
       shell: bash
       env:
         INPUT_PATH_PREFIX: ${{ inputs.path_prefix }}
+        INPUT_TOX_ENVS: ${{ inputs.tox-envs }}
+        INPUT_PARALLEL: ${{ inputs.parallel }}
       run: |
         # Validate action/environment
         # fail <reason>: stop, publishing <reason> as the error output
@@ -79,6 +83,23 @@ runs:
 
         echo "✅ path_prefix '${INPUT_PATH_PREFIX}'" \
              "is valid and contains tox.ini"
+
+        # Both inputs reach the tox command line. Anything beyond names
+        # and counts could carry an option such as --notest, which skips
+        # every command and still reports success.
+        env_name='[A-Za-z0-9_][A-Za-z0-9_.+-]*'
+        if [[ -n "$INPUT_TOX_ENVS" ]] && \
+           ! [[ "$INPUT_TOX_ENVS" =~ ^${env_name}(,${env_name})*$ ]]; then
+          echo "❌ Error: tox-envs must be env names separated by commas," \
+               "with no spaces or options: '${INPUT_TOX_ENVS}'"
+          fail invalid-tox-envs
+        fi
+        if [[ -n "$INPUT_PARALLEL" ]] && \
+           ! [[ "$INPUT_PARALLEL" =~ ^(auto|all|off|[0-9]+)$ ]]; then
+          echo "❌ Error: parallel must be auto, all, off or a number:" \
+               "'${INPUT_PARALLEL}'"
+          fail invalid-parallel
+        fi
 
     - name: 'Setup Python'
       id: setup-python
@@ -276,17 +297,13 @@ runs:
           --disable-pip-version-check --require-hashes --only-binary=:all: \
           -r "${GITHUB_ACTION_PATH}/requirements/tox.txt"
 
-        TOX_OPTIONS_LIST=''
+        tox_args=()
+        # 'off', like an empty value, runs the environments in turn
+        if [[ -n "$parallel" && "$parallel" != 'off' ]]; then
+            tox_args+=(--parallel "$parallel" --parallel-live)
+        fi
         if [[ -n "$tox_envs" ]]; then
-            TOX_OPTIONS_LIST=" -e $tox_envs"
+            tox_args+=(-e "$tox_envs")
         fi
 
-        PARALLEL_OPTIONS=''
-        if [[ -n "$parallel" ]]; then
-            PARALLEL_OPTIONS=" --parallel $parallel --parallel-live"
-        fi
-
-        # $TOX_OPTIONS_LIST and $PARALLEL_OPTIONS are intentionally not
-        # surrounded by quotes to correctly pass options to tox
-        # shellcheck disable=SC2086
-        "$tox_bin/tox" $PARALLEL_OPTIONS $TOX_OPTIONS_LIST
+        "$tox_bin/tox" "${tox_args[@]}"

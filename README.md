@@ -65,7 +65,7 @@ steps:
 
 | Name                | Required | Default | Description                                                     |
 | ------------------- | -------- | ------- | --------------------------------------------------------------- |
-| path_prefix         | False    | '.'     | Directory location containing project code                      |
+| path_prefix         | False    | '.'     | Directory containing tox.ini, inside the workspace              |
 | python-version      | False    | -       | Version of Python to use                                        |
 | python-version-file | False    | -       | File containing the Python version to use (e.g. pyproject.toml) |
 | tox-envs            | False    | -       | Comma-separated tox envs to run on this py-version; no spaces   |
@@ -89,20 +89,24 @@ The action fails at the first input check that does not pass, and sets
 `error` to identify that check. Read it from a step with
 `continue-on-error: true` to tell one failure from another:
 
-| Check                                         | error                    |
-| --------------------------------------------- | ------------------------ |
-| `path_prefix` directory missing               | missing-path-prefix      |
-| `tox.ini` missing from `path_prefix`          | missing-tox-ini          |
-| `tox.ini` not readable                        | unreadable-tox-ini       |
-| `tox-envs` not comma-separated env names      | invalid-tox-envs         |
-| `parallel` not auto, all, off or a number     | invalid-parallel         |
-| `pre-build-script` path contains `..`         | script-path-traversal    |
-| `pre-build-script` name lacks `.sh` suffix    | script-not-sh            |
-| Workspace path does not resolve               | workspace-unresolved     |
-| `pre-build-script` path does not resolve      | script-unresolved        |
-| `pre-build-script` resolves outside workspace | script-outside-workspace |
-| `pre-build-script` file missing               | script-not-found         |
-| `pre-build-script` not executable             | script-not-executable    |
+<!-- markdownlint-disable MD013 -->
+
+| Check                                         | error                         |
+| --------------------------------------------- | ----------------------------- |
+| `path_prefix` directory missing               | missing-path-prefix           |
+| Workspace path does not resolve               | workspace-unresolved          |
+| `path_prefix` path does not resolve           | path-prefix-unresolved        |
+| `path_prefix` resolves outside workspace      | path-prefix-outside-workspace |
+| `tox.ini` missing from `path_prefix`          | missing-tox-ini               |
+| `tox.ini` not readable                        | unreadable-tox-ini            |
+| `tox-envs` not comma-separated env names      | invalid-tox-envs              |
+| `parallel` not auto, all, off or a number     | invalid-parallel              |
+| `pre-build-script` path contains `..`         | script-path-traversal         |
+| `pre-build-script` name lacks `.sh` suffix    | script-not-sh                 |
+| `pre-build-script` path does not resolve      | script-unresolved             |
+| `pre-build-script` resolves outside workspace | script-outside-workspace      |
+| `pre-build-script` file missing               | script-not-found              |
+| `pre-build-script` not executable             | script-not-executable         |
 
 <!-- markdownlint-enable MD013 -->
 
@@ -156,7 +160,9 @@ environments. The action does not install dependencies directly.
   value cannot pass tox an option such as `--notest`
 - `parallel` takes `auto`, `all` or a process count; `off` or an
   empty value runs the environments in turn
-- The action validates that `path_prefix` exists and contains `tox.ini` before proceeding
+- The action validates that `path_prefix` exists, resolves, after
+  following any symlinks, to the workspace or a directory inside it, and
+  contains `tox.ini` before proceeding
 - The action changes to the `path_prefix` before executing tox commands
 - **Input precedence**: When both `python-version` and
   `python-version-file` exist, `python-version` takes precedence and

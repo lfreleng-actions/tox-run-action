@@ -192,6 +192,12 @@ jobs:
           - case: 'missing path_prefix directory'
             path_prefix: 'nonexistent-dir'
             error: 'missing-path-prefix'
+          - case: 'path_prefix above the workspace'
+            path_prefix: '..'
+            error: 'path-prefix-outside-workspace'
+          - case: 'path_prefix symlinked out of the workspace'
+            path_prefix: 'escape'
+            error: 'path-prefix-outside-workspace'
           - case: 'missing tox.ini'
             path_prefix: 'no-tox-ini'
             error: 'missing-tox-ini'
@@ -244,6 +250,10 @@ jobs:
             chmod +x "$1"
           }
           mkdir no-tox-ini
+          # A tox.ini outside the workspace, reached through a symlink
+          mkdir "${RUNNER_TEMP}/escape"
+          touch "${RUNNER_TEMP}/escape/tox.ini"
+          ln -s "${RUNNER_TEMP}/escape" escape
           # The runner user is not root, so mode 000 denies it reading
           mkdir unreadable-tox-ini
           touch unreadable-tox-ini/tox.ini

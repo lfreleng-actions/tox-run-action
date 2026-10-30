@@ -7,7 +7,8 @@ description: "Run tox with specified Python version and environments"
 
 inputs:
   path_prefix:
-    description: 'Directory location containing project code and tox.ini'
+    # yamllint disable-line rule:line-length
+    description: 'Directory containing tox.ini, relative to and inside the workspace'
     required: false
     default: '.'
   python-version:
@@ -15,18 +16,20 @@ inputs:
     required: false
   python-version-file:
     # yamllint disable-line rule:line-length
-    description: 'File containing the Python version to use (e.g. pyproject.toml)'
+    description: 'File holding the Python version, relative to the workspace root (e.g. pyproject.toml)'
     required: false
   tox-envs:
-    description: 'Tox envs to run on this py-version'
+    # yamllint disable-line rule:line-length
+    description: 'Comma-separated tox envs to run on this py-version; no spaces or options'
     required: false
   parallel:
-    description: 'Whether to run jobs in parallel'
+    # yamllint disable-line rule:line-length
+    description: 'Parallel processes: auto, all, a number, or off/empty to run envs in turn'
     required: false
     default: 'auto'
   pre-build-script:
     # yamllint disable-line rule:line-length
-    description: 'Path to optional pre-build repository shell script; path traversal blocked'
+    description: 'Executable .sh script, relative to and inside the workspace, run before tox'
     required: false
 
 outputs:
@@ -47,6 +50,8 @@ runs:
       shell: bash
       env:
         INPUT_PATH_PREFIX: ${{ inputs.path_prefix }}
+        INPUT_TOX_ENVS: ${{ inputs.tox-envs }}
+        INPUT_PARALLEL: ${{ inputs.parallel }}
       run: |
         # Validate action/environment
         # fail <reason>: stop, publishing <reason> as the error output
@@ -67,6 +72,31 @@ runs:
           fail missing-path-prefix
         fi
 
+        # Keep tox inside the checkout: resolve both paths through any
+        # symlinks, then require the directory to be the workspace or
+        # below it. '..' or a symlink would otherwise run a tox.ini
+        # from elsewhere on the runner.
+        resolve() {
+          readlink -f "$1" 2>/dev/null || realpath "$1" 2>/dev/null
+        }
+        WORKSPACE_DIR=$(resolve "${GITHUB_WORKSPACE}") || true
+        if [[ -z "$WORKSPACE_DIR" ]]; then
+          echo "❌ Error: Failed to resolve canonical path for workspace"
+          fail workspace-unresolved
+        fi
+        CANONICAL_TOX_DIR=$(resolve "$TOX_DIR") || true
+        if [[ -z "$CANONICAL_TOX_DIR" ]]; then
+          echo "❌ Error: Failed to resolve canonical path for" \
+               "path_prefix '${INPUT_PATH_PREFIX}'"
+          fail path-prefix-unresolved
+        fi
+        if [[ "$CANONICAL_TOX_DIR" != "$WORKSPACE_DIR" && \
+              "$CANONICAL_TOX_DIR" != "$WORKSPACE_DIR"/* ]]; then
+          echo "❌ Error: path_prefix '${INPUT_PATH_PREFIX}' resolves to" \
+               "'$CANONICAL_TOX_DIR', outside the workspace"
+          fail path-prefix-outside-workspace
+        fi
+
         # Check for tox.ini file existence and readability
         if [[ ! -f "$TOX_DIR/tox.ini" ]]; then
           echo "❌ Error: tox.ini not found in '${INPUT_PATH_PREFIX}'"
@@ -80,12 +110,21 @@ runs:
         echo "✅ path_prefix '${INPUT_PATH_PREFIX}'" \
              "is valid and contains tox.ini"
 
-        # Validate pipx is available
-        if ! command -v pipx &> /dev/null; then
-            echo "❌ Error: pipx is not available on this runner"
-            echo "pipx is required to run tox in an isolated environment"
-            echo "GitHub-hosted runners include pipx by default"
-            fail missing-pipx
+        # Both inputs reach the tox command line. Anything beyond names
+        # and counts could carry an option such as --notest, which skips
+        # every command and still reports success.
+        env_name='[A-Za-z0-9_][A-Za-z0-9_.+-]*'
+        if [[ -n "$INPUT_TOX_ENVS" ]] && \
+           ! [[ "$INPUT_TOX_ENVS" =~ ^${env_name}(,${env_name})*$ ]]; then
+          echo "❌ Error: tox-envs must be env names separated by commas," \
+               "with no spaces or options: '${INPUT_TOX_ENVS}'"
+          fail invalid-tox-envs
+        fi
+        if [[ -n "$INPUT_PARALLEL" ]] && \
+           ! [[ "$INPUT_PARALLEL" =~ ^(auto|all|off|[0-9]+)$ ]]; then
+          echo "❌ Error: parallel must be auto, all, off or a number:" \
+               "'${INPUT_PARALLEL}'"
+          fail invalid-parallel
         fi
 
     - name: 'Setup Python'
@@ -178,7 +217,9 @@ runs:
         INPUT_PATH_PREFIX: ${{ inputs.path_prefix }}
       run: |
         # Detect dependency management tool
-        cd "${GITHUB_WORKSPACE}/${INPUT_PATH_PREFIX}" || exit 1
+        # -P resolves '..' after symlinks, as validation did; a logical
+        # cd could land outside the directory validation approved
+        cd -P -- "${GITHUB_WORKSPACE}/${INPUT_PATH_PREFIX}" || exit 1
 
         echo "🔍 Detecting Python dependency management tool"
         # Priority order for detection and installation
@@ -236,50 +277,33 @@ runs:
         tox_envs="${INPUT_TOX_ENVS}"
         parallel="${INPUT_PARALLEL}"
 
-        cd "${GITHUB_WORKSPACE}/$path_prefix" || exit 1
+        # -P resolves '..' after symlinks, as validation did; a logical
+        # cd could land outside the directory validation approved
+        cd -P -- "${GITHUB_WORKSPACE}/$path_prefix" || exit 1
 
-        # Python distutils module was deprecated in Python 3.10 and
-        # removed in 3.12.
-
-        # Get the actual Python version that was installed
-        INSTALLED_VERSION=$(python --version 2>&1 | cut -d' ' -f2)
-        MIN_PYTHON_VERSION='3.12'
-
-        # Extract major.minor versions (e.g., 3.12.3 -> major=3, minor=12)
-        INP_MAJOR=$(echo "$INSTALLED_VERSION" | cut -d'.' -f1)
-        INP_MINOR=$(echo "$INSTALLED_VERSION" | cut -d'.' -f2)
-        MIN_MAJOR=$(echo "$MIN_PYTHON_VERSION" | cut -d'.' -f1)
-        MIN_MINOR=$(echo "$MIN_PYTHON_VERSION" | cut -d'.' -f2)
-
-        # Validate that version components are numeric
-        if ! [[ "$INP_MAJOR" =~ ^[0-9]+$ ]] || \
-           ! [[ "$INP_MINOR" =~ ^[0-9]+$ ]]; then
-            echo "❌ Error: Unable to parse Python version: '$INSTALLED_VERSION'"
-            echo "Expected format: X.Y.Z (e.g., 3.12.1)"
-            exit 1
+        # Install tox from the hashed lock, on the Python set up above,
+        # into a virtual environment of its own. A bare install would
+        # take whatever tox PyPI served on the day. -I keeps the project
+        # directory, and PYTHONPATH, off sys.path, so a local venv.py or
+        # pip.py cannot stand in for the real module.
+        tox_venv=$(mktemp -d "${RUNNER_TEMP}/tox-venv.XXXXXX")
+        "${STEPS_SETUP_PYTHON_OUTPUTS_PYTHON_PATH}" -I -m venv "$tox_venv"
+        tox_bin="$tox_venv/bin"
+        if [[ ! -d "$tox_bin" ]]; then
+            # Windows lays a virtual environment out differently
+            tox_bin="$tox_venv/Scripts"
         fi
+        "$tox_bin/python" -I -m pip install --quiet \
+          --disable-pip-version-check --require-hashes --only-binary=:all: \
+          -r "${GITHUB_ACTION_PATH}/requirements/tox.txt"
 
-        if (( INP_MAJOR > MIN_MAJOR )) || \
-           { (( INP_MAJOR == MIN_MAJOR )) && \
-             (( INP_MINOR >= MIN_MINOR )); }; then
-            # For Python 3.12+, upgrade pip and setuptools to ensure
-            # compatibility
-            # with packaging tools that no longer rely on distutils.
-            pip install --upgrade pip setuptools
+        tox_args=()
+        # 'off', like an empty value, runs the environments in turn
+        if [[ -n "$parallel" && "$parallel" != 'off' ]]; then
+            tox_args+=(--parallel "$parallel" --parallel-live)
         fi
-
-        TOX_OPTIONS_LIST=''
         if [[ -n "$tox_envs" ]]; then
-            TOX_OPTIONS_LIST=" -e $tox_envs"
+            tox_args+=(-e "$tox_envs")
         fi
 
-        PARALLEL_OPTIONS=''
-        if [[ -n "$parallel" ]]; then
-            PARALLEL_OPTIONS=" --parallel $parallel --parallel-live"
-        fi
-
-        # $TOX_OPTIONS_LIST and $PARALLEL_OPTIONS are intentionally not
-        # surrounded by quotes to correctly pass options to tox
-        # shellcheck disable=SC2086
-        pipx run --python "${STEPS_SETUP_PYTHON_OUTPUTS_PYTHON_PATH}" \
-        tox $PARALLEL_OPTIONS $TOX_OPTIONS_LIST
+        "$tox_bin/tox" "${tox_args[@]}"

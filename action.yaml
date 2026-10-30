@@ -16,7 +16,7 @@ inputs:
     required: false
   python-version-file:
     # yamllint disable-line rule:line-length
-    description: 'File containing the Python version to use (e.g. pyproject.toml)'
+    description: 'File holding the Python version, relative to the workspace root (e.g. pyproject.toml)'
     required: false
   tox-envs:
     # yamllint disable-line rule:line-length
@@ -29,7 +29,7 @@ inputs:
     default: 'auto'
   pre-build-script:
     # yamllint disable-line rule:line-length
-    description: 'Path to optional pre-build repository shell script; path traversal blocked'
+    description: 'Executable .sh script, relative to and inside the workspace, run before tox'
     required: false
 
 outputs:

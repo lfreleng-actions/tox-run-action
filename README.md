@@ -31,28 +31,33 @@ needs no tox or `pipx` of its own.
 steps:
   - name: "Run tox tests with explicit Python version"
     id: tox-run
-    uses: lfreleng-actions/tox-run-action@main
+    # Pin a real tox-run-action release SHA in place of <SHA>.
+    uses: lfreleng-actions/tox-run-action@<SHA>
     with:
-      path_prefix: './my-project'
+      path_prefix: 'my-project'
       python-version: '3.11'
       tox-envs: 'py311,lint,docs'
       parallel: 'auto'
-      pre-build-script: './scripts/setup.sh'
+      pre-build-script: 'scripts/setup.sh'
 
   - name: "Run tox tests with version from file"
     id: tox-run-from-file
-    uses: lfreleng-actions/tox-run-action@main
+    uses: lfreleng-actions/tox-run-action@<SHA>
     with:
-      path_prefix: './my-project'
-      python-version-file: '.python-version'
+      path_prefix: 'my-project'
+      # Relative to the workspace root, not to path_prefix
+      python-version-file: 'my-project/.python-version'
       tox-envs: 'py311,lint,docs'
       parallel: 'auto'
 
   - name: "Use build-backend output in next step"
     id: show-backend
+    # Pass outputs through env: rather than expanding them inside run:
+    env:
+      BUILD_BACKEND: ${{ steps.tox-run.outputs.build-backend }}
     run: |
-      echo "Detected build backend: ${{ steps.tox-run.outputs.build-backend }}"
-      if [[ "${{ steps.tox-run.outputs.build-backend }}" == "poetry" ]]; then
+      echo "Detected build backend: $BUILD_BACKEND"
+      if [[ "$BUILD_BACKEND" == "poetry" ]]; then
         echo "Using Poetry-specific commands..."
       fi
 ```
@@ -63,14 +68,14 @@ steps:
 
 <!-- markdownlint-disable MD013 -->
 
-| Name                | Required | Default | Description                                                     |
-| ------------------- | -------- | ------- | --------------------------------------------------------------- |
-| path_prefix         | False    | '.'     | Directory containing tox.ini, inside the workspace              |
-| python-version      | False    | -       | Version of Python to use                                        |
-| python-version-file | False    | -       | File containing the Python version to use (e.g. pyproject.toml) |
-| tox-envs            | False    | -       | Comma-separated tox envs to run on this py-version; no spaces   |
-| parallel            | False    | 'auto'  | Parallel processes: auto, all, a number, or off/empty           |
-| pre-build-script    | False    | -       | Path to optional pre-build script to run before tox             |
+| Name                | Required | Default | Description                                                        |
+| ------------------- | -------- | ------- | ------------------------------------------------------------------ |
+| path_prefix         | False    | '.'     | Directory containing tox.ini, inside the workspace                 |
+| python-version      | False    | -       | Version of Python to use                                           |
+| python-version-file | False    | -       | File holding the Python version, relative to the workspace root    |
+| tox-envs            | False    | -       | Comma-separated tox envs to run on this py-version; no spaces      |
+| parallel            | False    | 'auto'  | Parallel processes: auto, all, a number, or off/empty              |
+| pre-build-script    | False    | -       | Executable `.sh` script, relative to the workspace, run before tox |
 
 <!-- markdownlint-enable MD013 -->
 
@@ -134,7 +139,7 @@ The action automatically handles:
   - `pdm.lock` (PDM)
   - `poetry.lock` (Poetry)
   - `Pipfile.lock` (Pipenv)
-  - `requirements.txt` with `requirements.in` (pip-tools)
+  - `requirements.txt` with `==` pins or a `requirements.in` (pip-tools)
   - `requirements.txt` (plain pip)
   - `pyproject.toml` (fallback)
 - Parallel execution configuration
@@ -154,7 +159,9 @@ environments. The action does not install dependencies directly.
   `isolated_build = True`
 - When `tox-envs` is not specified, tox will run its default environments
 - The `pre-build-script` path is relative to the repository root, and must
-  resolve, after following any symlinks, to a file inside the workspace
+  resolve, after following any symlinks, to a file inside the workspace.
+  The script runs as trusted repository code, as `tox.ini` does: it can
+  set environment variables and `PATH` entries for the steps after it
 - `tox-envs` takes environment names separated by commas, such as
   `py311,lint`, with no spaces. The action refuses anything else, so a
   value cannot pass tox an option such as `--notest`
@@ -174,17 +181,21 @@ environments. The action does not install dependencies directly.
   2. **PDM** (pdm.lock) - PEP 582 compliant dependency manager
   3. **Poetry** (poetry.lock) - Popular Python packaging tool
   4. **Pipenv** (Pipfile.lock) - Python dependency management
-  5. **pip-tools** (requirements.txt + requirements.in) - Pin management
+  5. **pip-tools** (requirements.txt with `==` pins, or beside a
+     requirements.in) - Pin management
   6. **pip** (requirements.txt) - Standard Python package installer
-  7. **pyproject.toml** (editable install) - Fallback for PEP 621 projects
+  7. **pyproject.toml** without a lock file - Fallback for PEP 621
+     projects, reported as `pip`
 
   Note: tox manages dependencies in isolated environments. The detection
   result is available via the `build-backend` output.
 - If neither `python-version` nor `python-version-file` specifies a version,
-  `actions/setup-python` automatically uses the version from a
-  `.python-version` file if present, or falls back to the system default.
+  `actions/setup-python` uses the version from a `.python-version` file
+  at the workspace root, not in `path_prefix`, if present, or falls
+  back to the system default.
 - You can explicitly specify a file to determine the Python version using
-  `python-version-file`. Supported formats include `.python-version`,
-  `pyproject.toml`, `.tool-versions`, and `Pipfile`.
+  `python-version-file`, relative to the workspace root. Supported
+  formats include `.python-version`, `pyproject.toml`, `.tool-versions`,
+  and `Pipfile`.
 - The `build-backend` output shows which dependency management tool the
   action detected in your project

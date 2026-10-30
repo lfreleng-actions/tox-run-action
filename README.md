@@ -118,9 +118,7 @@ The action performs the following steps:
 4. **Dependency Detection**: Automatically detects the dependency management
    tool (uv, PDM, Poetry, Pipenv, pip-tools, or pip) and outputs it as
    `build-backend`
-5. **Python Compatibility**: For Python 3.12+, ensures `setuptools` upgrade
-   due to `distutils` removal
-6. **Tox Execution**: Installs tox from `requirements/tox.txt` into a
+5. **Tox Execution**: Installs tox from `requirements/tox.txt` into a
    virtual environment on the configured Python, then runs it with the
    specified environments and parallel settings
 
@@ -135,8 +133,6 @@ The action automatically handles:
   - `requirements.txt` with `requirements.in` (pip-tools)
   - `requirements.txt` (plain pip)
   - `pyproject.toml` (fallback)
-- Python version compatibility (upgrades setuptools for 3.12+ due to
-  `distutils` removal)
 - Parallel execution configuration
 - Environment-specific tox runs
 

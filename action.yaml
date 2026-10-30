@@ -251,36 +251,6 @@ runs:
 
         cd "${GITHUB_WORKSPACE}/$path_prefix" || exit 1
 
-        # Python distutils module was deprecated in Python 3.10 and
-        # removed in 3.12.
-
-        # Get the actual Python version that was installed
-        INSTALLED_VERSION=$(python --version 2>&1 | cut -d' ' -f2)
-        MIN_PYTHON_VERSION='3.12'
-
-        # Extract major.minor versions (e.g., 3.12.3 -> major=3, minor=12)
-        INP_MAJOR=$(echo "$INSTALLED_VERSION" | cut -d'.' -f1)
-        INP_MINOR=$(echo "$INSTALLED_VERSION" | cut -d'.' -f2)
-        MIN_MAJOR=$(echo "$MIN_PYTHON_VERSION" | cut -d'.' -f1)
-        MIN_MINOR=$(echo "$MIN_PYTHON_VERSION" | cut -d'.' -f2)
-
-        # Validate that version components are numeric
-        if ! [[ "$INP_MAJOR" =~ ^[0-9]+$ ]] || \
-           ! [[ "$INP_MINOR" =~ ^[0-9]+$ ]]; then
-            echo "❌ Error: Unable to parse Python version: '$INSTALLED_VERSION'"
-            echo "Expected format: X.Y.Z (e.g., 3.12.1)"
-            exit 1
-        fi
-
-        if (( INP_MAJOR > MIN_MAJOR )) || \
-           { (( INP_MAJOR == MIN_MAJOR )) && \
-             (( INP_MINOR >= MIN_MINOR )); }; then
-            # For Python 3.12+, upgrade pip and setuptools to ensure
-            # compatibility
-            # with packaging tools that no longer rely on distutils.
-            pip install --upgrade pip setuptools
-        fi
-
         # Install tox from the hashed lock, on the Python set up above,
         # into a virtual environment of its own. A bare install would
         # take whatever tox PyPI served on the day. -I keeps the project

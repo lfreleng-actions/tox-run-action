@@ -56,15 +56,11 @@ ws="${work}/ws"
 mkdir -p "${ws}"
 : > "${ws}/tox.ini"
 
-# Stubs. 'python' answers the run step's version probe; 'interpreter'
-# stands in for the setup-python interpreter, and its virtual
-# environment's python and tox log their arguments one per line.
+# Stubs. 'interpreter' stands in for the setup-python interpreter, and
+# its virtual environment's python and tox log their arguments one per
+# line.
 stubs="${work}/stubs"
 mkdir -p "${stubs}"
-cat > "${stubs}/python" << 'EOF'
-#!/bin/sh
-echo 'Python 3.11.9'
-EOF
 cat > "${stubs}/interpreter" << 'EOF'
 #!/bin/sh
 [ "$1" = -I ] && [ "$2" = -m ] && [ "$3" = venv ] || exit 2

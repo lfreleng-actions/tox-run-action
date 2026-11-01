@@ -174,7 +174,7 @@ jobs:
       # against stub interpreters that record the tox command line.
       - name: 'Run tox-envs and parallel tests'
         shell: bash
-        run: tests/tox-inputs.sh
+        run: bash tests/tox-step.sh
 
   test-error-handling:
     name: 'Test error handling (${{ matrix.case }})'

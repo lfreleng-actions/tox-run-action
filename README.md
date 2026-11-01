@@ -153,8 +153,8 @@ environments. The action does not install dependencies directly.
 - The action installs tox from `requirements/tox.txt`, a lock with a
   hash for every package, into a virtual environment of its own. The
   lock picks the newest tox that supports the configured Python, so
-  Python 3.8 to 3.10 get an older tox than 3.11 and later. Dependabot
-  keeps it current; to refresh it by hand, run the command in its header
+  Python 3.8 to 3.10 get an older tox than 3.11 and later. To refresh
+  it, follow the comment in `requirements/tox.in`
 - Tox handles package building internally when `tox.ini` sets
   `isolated_build = True`
 - When `tox-envs` is not specified, tox will run its default environments

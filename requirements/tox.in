@@ -2,5 +2,9 @@
 # SPDX-FileCopyrightText: 2026 The Linux Foundation
 
 # The tox the action installs. tox.txt is the hashed lock generated from
-# this file; regenerate it with the command in its header.
+# this file, with one tox per range of Python versions. Refresh it with
+# the command in its header, moving --exclude-newer to seven days before
+# the refresh; add --upgrade to move every pin. Dependabot cannot
+# maintain it: it regenerates the lock for one interpreter and drops the
+# per-version markers.
 tox

@@ -127,9 +127,10 @@ The action performs the following steps:
 4. **Dependency Detection**: Automatically detects the dependency management
    tool (uv, PDM, Poetry, Pipenv, pip-tools, or pip) and outputs it as
    `build-backend`
-5. **Tox Execution**: Installs tox from `requirements/tox.txt` into a
-   virtual environment on the configured Python, then runs it with the
-   specified environments and parallel settings
+5. **Tox Execution**: Installs uv with `astral-sh/setup-uv`, uses it to
+   install tox from `tox-lock/uv.lock` into a virtual environment on the
+   configured Python, then runs tox with the specified environments and
+   parallel settings
 
 The action automatically handles:
 
@@ -150,11 +151,17 @@ environments. The action does not install dependencies directly.
 
 ## Notes
 
-- The action installs tox from `requirements/tox.txt`, a lock with a
-  hash for every package, into a virtual environment of its own. The
+- The action installs tox from `tox-lock/uv.lock`, a uv lock with a
+  hash for every file, into a virtual environment of its own. The
   lock picks the newest tox that supports the configured Python, so
-  Python 3.8 to 3.10 get an older tox than 3.11 and later. Dependabot
-  keeps it current; to refresh it by hand, run the command in its header
+  Python 3.8 to 3.10 get an older tox than 3.11 and later. The install
+  ignores any uv configuration and `UV_*` variables in the caller's
+  project, though tox and its commands still see those variables.
+  On Windows, `setup-uv` sets `UV_TOOL_DIR` and `UV_TOOL_BIN_DIR` for
+  the rest of the job; the action passes it any values the workflow
+  sets in `env`, so those stay as they were.
+  Dependabot keeps the lock current; `tox-lock/README.md` describes
+  how to refresh it by hand
 - Tox handles package building internally when `tox.ini` sets
   `isolated_build = True`
 - When `tox-envs` is not specified, tox will run its default environments

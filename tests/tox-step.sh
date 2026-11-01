@@ -11,9 +11,10 @@
 #
 # As in tests/pre-build-script.sh, yq extracts each step's run block
 # from action.yaml and bash runs it with the flags GitHub uses for
-# 'shell: bash', under an emptied environment. The run step gets stub
-# interpreters: the "Python" builds a virtual environment whose pip and
-# tox only record their arguments, so no case installs or runs anything.
+# 'shell: bash', under an emptied environment. The run step gets stubs:
+# a "uv" that records its arguments and environment, and builds a
+# virtual environment holding a tox that records its own, so no case
+# installs or runs anything.
 #
 # Usage: bash tests/tox-step.sh    (needs mikefarah yq v4 and bash)
 
@@ -65,32 +66,36 @@ workspace="${ws}"
 prefix='.'
 toolpath=''
 
-# Stubs. 'interpreter' stands in for the setup-python interpreter, and
-# its virtual environment's python and tox log their arguments one per
-# line.
+# Stubs. 'interpreter' stands in for the setup-python interpreter, which
+# only uv may run. 'uv' logs its arguments, and then the UV_* variables
+# it sees, one per line, and puts the stub tox, which logs its own
+# arguments and the UV_* variables it sees, in the environment it was
+# given.
 stubs="${work}/stubs"
 mkdir -p "${stubs}"
 cat > "${stubs}/interpreter" << 'EOF'
 #!/bin/sh
-[ "$1" = -I ] && [ "$2" = -m ] && [ "$3" = venv ] || exit 2
-mkdir -p "$4/bin"
-cp "${STUB_DIR}/venv-python" "$4/bin/python"
-cp "${STUB_DIR}/tox" "$4/bin/tox"
+exit 2
 EOF
-cat > "${stubs}/venv-python" << 'EOF'
+cat > "${stubs}/uv" << 'EOF'
 #!/bin/sh
-for arg; do printf '%s\n' "$arg"; done > "${PIP_LOG}"
+for arg; do printf '%s\n' "$arg"; done > "${STUB_UV_LOG}"
+env | grep '^UV_' | sort > "${STUB_UV_ENV}"
+mkdir -p "${UV_PROJECT_ENVIRONMENT}/bin"
+cp "${STUB_DIR}/tox" "${UV_PROJECT_ENVIRONMENT}/bin/tox"
 EOF
 cat > "${stubs}/tox" << 'EOF'
 #!/bin/sh
 for arg; do printf '%s\n' "$arg"; done > "${TOX_LOG}"
 pwd -P > "${TOX_CWD}"
+env | grep '^UV_' | sort > "${TOX_ENV}"
 EOF
 chmod +x "${stubs}"/*
 
 # step <script> <tox-envs> <parallel>: run a step as the runner would,
 # leaving its output in ${work}/out and its error output in
-# ${work}/output.
+# ${work}/output. The caller's environment carries UV_* variables that
+# would redirect uv's index and environment if they reached it.
 step() {
   : > "${work}/output"
   rm -rf "${work}/tmp"
@@ -99,9 +104,14 @@ step() {
     HOME="${HOME}" \
     GITHUB_WORKSPACE="${workspace}" GITHUB_OUTPUT="${work}/output" \
     GITHUB_ACTION_PATH="${root}" RUNNER_TEMP="${work}/tmp" \
-    STUB_DIR="${stubs}" PIP_LOG="${work}/pip" TOX_LOG="${work}/tox" \
+    STUB_DIR="${stubs}" STUB_UV_LOG="${work}/uv" \
+    STUB_UV_ENV="${work}/uv-env" \
+    TOX_LOG="${work}/tox" TOX_ENV="${work}/tox-env" \
     TOX_CWD="${work}/cwd" GITHUB_STEP_SUMMARY="${work}/summary" \
     STEPS_SETUP_PYTHON_OUTPUTS_PYTHON_PATH="${stubs}/interpreter" \
+    STEPS_SETUP_UV_OUTPUTS_UV_PATH="${stubs}/uv" \
+    UV_INDEX_URL='https://index.invalid/simple' \
+    UV_PROJECT_ENVIRONMENT="${work}/caller-venv" \
     INPUT_PATH_PREFIX="${prefix}" INPUT_TOX_ENVS="$2" \
     INPUT_PARALLEL="$3" \
     bash --noprofile --norc -eo pipefail "$1") > "${work}/out" 2>&1
@@ -265,11 +275,42 @@ echo '== tox install'
 cases=$((cases + 1))
 ok=1
 step "${run}" '' '' || ok=0
-# Isolated, so a pip.py in the project cannot replace pip
-[ "$(head -n 1 "${work}/pip" 2> /dev/null)" = '-I' ] || ok=0
-grep -sqxF -- '--require-hashes' "${work}/pip" || ok=0
-grep -sqxF -- "${root}/requirements/tox.txt" "${work}/pip" || ok=0
-report "${ok}" 'tox comes from the hashed lock, installed in isolation'
+# The caller's UV_* variables, set in step(), never reach uv: only the
+# environment the step creates under RUNNER_TEMP does
+uv_env="$(cat "${work}/uv-env" 2> /dev/null)" || true
+[[ "${uv_env}" == "UV_PROJECT_ENVIRONMENT=${work}/tmp/tox-venv."* ]] || ok=0
+[ "$(wc -l 2> /dev/null < "${work}/uv-env")" = 1 ] || ok=0
+[ "$(head -n 1 "${work}/uv" 2> /dev/null)" = 'sync' ] || ok=0
+for flag in --frozen --no-config --no-install-project; do
+  grep -sqxF -- "${flag}" "${work}/uv" || ok=0
+done
+grep -sqxF -- "${root}/tox-lock" "${work}/uv" || ok=0
+grep -sqxF -- "${stubs}/interpreter" "${work}/uv" || ok=0
+[ -f "${root}/tox-lock/uv.lock" ] || ok=0
+report "${ok}" "tox comes from the action's frozen uv lock, unconfigured"
+
+cases=$((cases + 1))
+ok=1
+step "${run}" '' '' || ok=0
+# tox and the commands it runs keep the caller's UV_* variables, which
+# a tox environment may pass through to its own uv
+printf '%s\n' "UV_INDEX_URL=https://index.invalid/simple" \
+  "UV_PROJECT_ENVIRONMENT=${work}/caller-venv" > "${work}/want"
+cmp -s "${work}/want" "${work}/tox-env" 2> /dev/null || ok=0
+report "${ok}" "tox sees the caller's UV_* variables"
+
+cases=$((cases + 1))
+ok=1
+# On Windows setup-uv replaces UV_TOOL_DIR and UV_TOOL_BIN_DIR unless
+# its inputs carry them, so the step must pass on the caller's values
+for pair in 'tool-dir UV_TOOL_DIR' 'tool-bin-dir UV_TOOL_BIN_DIR'; do
+  read -r input var <<< "${pair}"
+  value="$(INPUT="${input}" yq \
+    '.runs.steps[] | select(.id == "setup-uv") | .with[strenv(INPUT)]' \
+    "${root}/action.yaml" 2> /dev/null)" || ok=0
+  [ "${value}" = "\${{ env.${var} }}" ] || ok=0
+done
+report "${ok}" "setup-uv keeps the caller's uv tool directories"
 
 echo "${cases} cases, ${failures} failed"
 [ "${failures}" -eq 0 ]

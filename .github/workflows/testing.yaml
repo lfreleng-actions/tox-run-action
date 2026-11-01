@@ -171,7 +171,7 @@ jobs:
           persist-credentials: false
 
       # Runs the validation and run steps, extracted from action.yaml,
-      # against stub interpreters that record the tox command line.
+      # against stubs that record the uv and tox command lines.
       - name: 'Run tox-envs and parallel tests'
         shell: bash
         run: bash tests/tox-step.sh
@@ -332,7 +332,7 @@ jobs:
     timeout-minutes: 10
     strategy:
       fail-fast: false
-      # requirements/tox.txt resolves a different tox per interpreter
+      # tox-lock/uv.lock resolves a different tox per interpreter
       # below 3.11; one from each of its branches, and the newest.
       matrix:
         python: ['3.8', '3.9', '3.10', '3.11', '3.14']

@@ -135,6 +135,20 @@ runs:
         python-version: ${{ inputs.python-version }}
         python-version-file: ${{ inputs.python-version-file }}
 
+    # 'Run tox' uses uv to install tox from the action's own lock.
+    # No cache: this action runs in other repositories' jobs.
+    # On Windows, setup-uv sets UV_TOOL_DIR and UV_TOOL_BIN_DIR for the
+    # rest of the job unless given them, so hand it the caller's own.
+    - name: 'Install uv'
+      id: setup-uv
+      # yamllint disable-line rule:line-length
+      uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+      with:
+        version: '0.13.4'
+        enable-cache: false
+        tool-dir: ${{ env.UV_TOOL_DIR }}
+        tool-bin-dir: ${{ env.UV_TOOL_BIN_DIR }}
+
     - name: 'Run pre-build-script'
       id: pre-build
       if: ${{ inputs.pre-build-script != '' }}
@@ -271,6 +285,7 @@ runs:
         INPUT_PARALLEL: ${{ inputs.parallel }}
         # yamllint disable-line rule:line-length
         STEPS_SETUP_PYTHON_OUTPUTS_PYTHON_PATH: ${{ steps.setup-python.outputs.python-path }}
+        STEPS_SETUP_UV_OUTPUTS_UV_PATH: ${{ steps.setup-uv.outputs.uv-path }}
       run: |
         # Run tox
         path_prefix="${INPUT_PATH_PREFIX}"
@@ -281,21 +296,30 @@ runs:
         # cd could land outside the directory validation approved
         cd -P -- "${GITHUB_WORKSPACE}/$path_prefix" || exit 1
 
-        # Install tox from the hashed lock, on the Python set up above,
-        # into a virtual environment of its own. A bare install would
-        # take whatever tox PyPI served on the day. -I keeps the project
-        # directory, and PYTHONPATH, off sys.path, so a local venv.py or
-        # pip.py cannot stand in for the real module.
+        # Install tox from the action's uv lock, on the Python set up
+        # above, into a virtual environment of its own. A bare install
+        # would take whatever tox PyPI served on the day. This runs in
+        # the caller's project, so nothing of the caller's may steer it:
+        # --no-config skips any uv.toml or [tool.uv] found here, and
+        # every UV_* variable goes, so none can redirect the index, the
+        # project or the environment. The subshell confines that to the
+        # install: tox and its commands still see the caller's UV_*.
         tox_venv=$(mktemp -d "${RUNNER_TEMP}/tox-venv.XXXXXX")
-        "${STEPS_SETUP_PYTHON_OUTPUTS_PYTHON_PATH}" -I -m venv "$tox_venv"
+        (
+            while IFS= read -r name; do
+                unset "$name"
+            done < <(compgen -e | grep '^UV_' || true)
+            UV_PROJECT_ENVIRONMENT="$tox_venv" \
+              "${STEPS_SETUP_UV_OUTPUTS_UV_PATH}" \
+              sync --quiet --frozen --no-config --no-install-project \
+              --no-build --project "${GITHUB_ACTION_PATH}/tox-lock" \
+              --python "${STEPS_SETUP_PYTHON_OUTPUTS_PYTHON_PATH}"
+        )
         tox_bin="$tox_venv/bin"
         if [[ ! -d "$tox_bin" ]]; then
             # Windows lays a virtual environment out differently
             tox_bin="$tox_venv/Scripts"
         fi
-        "$tox_bin/python" -I -m pip install --quiet \
-          --disable-pip-version-check --require-hashes --only-binary=:all: \
-          -r "${GITHUB_ACTION_PATH}/requirements/tox.txt"
 
         tox_args=()
         # 'off', like an empty value, runs the environments in turn

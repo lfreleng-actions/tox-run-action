@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 The Linux Foundation
+
+# The tox the action installs, locked in uv.lock beside this file. See
+# README.md here for how the lock is maintained and refreshed.
+[project]
+name = "tox-run-action-tox"
+version = "0"
+requires-python = ">=3.8"
+dependencies = ["tox"]
+
+[tool.uv]
+package = false

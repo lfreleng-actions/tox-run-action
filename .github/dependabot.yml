@@ -12,9 +12,9 @@ updates:
       prefix: "Chore"
     cooldown:
       default-days: 7
-  # requirements/tox.txt, the hashed tox lock the action installs
-  - package-ecosystem: "pip"
-    directory: "/requirements"
+  # tox-lock/uv.lock, the hashed tox lock the action installs
+  - package-ecosystem: "uv"
+    directory: "/tox-lock"
     schedule:
       interval: "weekly"
     commit-message:

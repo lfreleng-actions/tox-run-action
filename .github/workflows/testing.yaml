@@ -394,3 +394,27 @@ jobs:
             fi
           done
           exit "$status"
+
+  check-tox-lock:
+    name: 'Check the tox lock holds one set'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 5
+    steps:
+      # yamllint disable-line rule:line-length
+      - uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43 # v2.22.3
+        with:
+          egress-policy: audit
+
+      - name: 'Checkout repository'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Fails on resolution-markers, a second copy of any package, or a
+      # tox below the floor in tox-lock/pyproject.toml, so a Dependabot
+      # update that forks the lock fails on its own pull request.
+      - name: 'Check tox-lock/uv.lock'
+        shell: bash
+        run: bash tests/check-tox-lock.sh

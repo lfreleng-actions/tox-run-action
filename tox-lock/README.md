@@ -17,8 +17,9 @@ with no `resolution-markers`. A lock that also covered older Pythons
 would hold an older copy of tox and its dependencies for each, and
 Dependabot would bump such a copy past the Python it serves. The lower
 bound on tox makes an update that cannot resolve fail, rather than fall
-back to an ancient tox. The lock records a sha256 hash for every file,
-and the action installs it with `uv sync --frozen`, which never
+back to an ancient tox. `tests/check-tox-lock.sh` enforces each of
+these on every pull request. The lock records a sha256 hash for every
+file, and the action installs it with `uv sync --frozen`, which never
 resolves again.
 
 ## Maintenance
@@ -37,4 +38,5 @@ uv lock --upgrade --no-config --project tox-lock --exclude-newer <date>
 uv records the cutoff in `uv.lock` as `exclude-newer` under
 `[options]`. Delete those lines before committing, then confirm
 `uv lock --check --no-config --project tox-lock` passes: a fixed cutoff
-left in the lock would stop Dependabot moving past that date.
+left in the lock would stop Dependabot moving past that date. Last,
+confirm `bash tests/check-tox-lock.sh` still passes.

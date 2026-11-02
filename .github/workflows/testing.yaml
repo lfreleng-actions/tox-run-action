@@ -332,8 +332,9 @@ jobs:
     timeout-minutes: 10
     strategy:
       fail-fast: false
-      # tox-lock/uv.lock resolves a different tox per interpreter
-      # below 3.11; one from each of its branches, and the newest.
+      # One caller on each Python the lock once forked on, and the
+      # newest. tox itself runs on the action's host Python, 3.13, which
+      # no entry uses, so an environment on the host shows as a mismatch.
       matrix:
         python: ['3.8', '3.9', '3.10', '3.11', '3.14']
     steps:
@@ -342,18 +343,54 @@ jobs:
         with:
           egress-policy: audit
 
+      # Each environment records the Python it ran on: the factor env
+      # (py38, py314, ...) and 'check', which has no Python factor
       - name: 'Create minimal tox project'
+        id: project
         shell: bash
+        env:
+          PYTHON: ${{ matrix.python }}
         run: |
           # Create minimal tox project
+          factor="py${PYTHON//./}"
           mkdir lock-test
-          printf '%s\n' '[tox]' 'env_list = check' 'skipsdist = true' \
-            '[testenv:check]' 'skip_install = true' \
-            'commands = python -c "print(42)"' > lock-test/tox.ini
+          cat > lock-test/ran.py << 'EOF'
+          import platform, sys
+          with open(sys.argv[1] + '.txt', 'w') as out:
+              out.write(platform.python_version())
+          EOF
+          cat > lock-test/tox.ini << 'EOF'
+          [tox]
+          skipsdist = true
+          [testenv]
+          skip_install = true
+          commands = python ran.py {env_name}
+          [testenv:check]
+          EOF
+          echo "factor=${factor}" >> "$GITHUB_OUTPUT"
 
       - name: 'Run tox installed from the lock'
         uses: $/
         with:
           path_prefix: 'lock-test'
           python-version: ${{ matrix.python }}
-          tox-envs: 'check'
+          tox-envs: '${{ steps.project.outputs.factor }},check'
+
+      - name: 'Verify each environment ran on the caller Python'
+        shell: bash
+        env:
+          PYTHON: ${{ matrix.python }}
+          FACTOR: ${{ steps.project.outputs.factor }}
+        run: |
+          # Verify each environment ran on the caller Python
+          status=0
+          for env in "$FACTOR" check; do
+            ran=$(cat "lock-test/${env}.txt" 2> /dev/null) || ran='nothing'
+            if [[ "$ran" != "${PYTHON}."* ]]; then
+              echo "::error::${env} ran on ${ran}, not Python ${PYTHON}"
+              status=1
+            else
+              echo "✅ ${env} ran on Python ${ran}"
+            fi
+          done
+          exit "$status"

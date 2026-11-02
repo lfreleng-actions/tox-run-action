@@ -122,14 +122,15 @@ The action performs the following steps:
 1. **Directory Validation**: Verifies that `path_prefix` exists and contains a
    `tox.ini` file before proceeding
 2. **Python Setup**: Configures the specified Python version using
-   `actions/setup-python`
+   `actions/setup-python`, and a pinned Python 3.13 for tox itself
+   that stays off `PATH`
 3. **Pre-build Script**: Executes an optional pre-build script if provided
 4. **Dependency Detection**: Automatically detects the dependency management
    tool (uv, PDM, Poetry, Pipenv, pip-tools, or pip) and outputs it as
    `build-backend`
 5. **Tox Execution**: Installs uv with `astral-sh/setup-uv`, uses it to
    install tox from `tox-lock/uv.lock` into a virtual environment on the
-   configured Python, then runs tox with the specified environments and
+   host Python 3.13, then runs tox with the specified environments and
    parallel settings
 
 The action automatically handles:
@@ -152,9 +153,12 @@ environments. The action does not install dependencies directly.
 ## Notes
 
 - The action installs tox from `tox-lock/uv.lock`, a uv lock with a
-  hash for every file, into a virtual environment of its own. The
-  lock picks the newest tox that supports the configured Python, so
-  Python 3.8 to 3.10 get an older tox than 3.11 and later. The install
+  hash for every file, into a virtual environment of its own, on a
+  pinned Python 3.13 that the action sets up for tox alone. That
+  Python stays off `PATH`, so for the rest of the job `python` is still
+  the Python from `python-version` or `python-version-file`. Current tox
+  needs Python 3.11 or later, so the lock targets those versions
+  alone and holds one version of each package. The install
   ignores any uv configuration and `UV_*` variables in the caller's
   project, though tox and its commands still see those variables.
   On Windows, `setup-uv` sets `UV_TOOL_DIR` and `UV_TOOL_BIN_DIR` for
@@ -162,6 +166,14 @@ environments. The action does not install dependencies directly.
   sets in `env`, so those stay as they were.
   Dependabot keeps the lock current; `tox-lock/README.md` describes
   how to refresh it by hand
+- Test environments still run on the Python you configure, Python 3.8
+  included. An environment with a Python factor, such as `py39`, finds
+  its interpreter on `PATH`. One without, such as `lint`, runs on the
+  configured Python too: the action passes tox
+  `-x testenv.default_base_python=<version>`, naming that Python's
+  version, such as `cpython3.12`. When the `tox.ini` sets its own
+  `default_base_python`, the action leaves it in force, and a
+  `base_python` an environment sets takes precedence as ever
 - Tox handles package building internally when `tox.ini` sets
   `isolated_build = True`
 - When `tox-envs` is not specified, tox will run its default environments

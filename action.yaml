@@ -135,6 +135,20 @@ runs:
         python-version: ${{ inputs.python-version }}
         python-version-file: ${{ inputs.python-version-file }}
 
+    # tox itself runs on this interpreter, whatever the caller tests on:
+    # current tox needs a newer Python than many callers use, and one
+    # host Python lets tox-lock/uv.lock hold a single set of versions.
+    # update-environment: false keeps it off PATH and out of
+    # pythonLocation, so the caller's job still sees only the Python
+    # set up above, and tox environments find theirs there.
+    - name: 'Setup Python for tox'
+      id: setup-tox-python
+      # yamllint disable-line rule:line-length
+      uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+      with:
+        python-version: '3.13'
+        update-environment: false
+
     # 'Run tox' uses uv to install tox from the action's own lock.
     # No cache: this action runs in other repositories' jobs.
     # On Windows, setup-uv sets UV_TOOL_DIR and UV_TOOL_BIN_DIR for the
@@ -285,25 +299,29 @@ runs:
         INPUT_PARALLEL: ${{ inputs.parallel }}
         # yamllint disable-line rule:line-length
         STEPS_SETUP_PYTHON_OUTPUTS_PYTHON_PATH: ${{ steps.setup-python.outputs.python-path }}
+        # yamllint disable-line rule:line-length
+        STEPS_SETUP_TOX_PYTHON_OUTPUTS_PYTHON_PATH: ${{ steps.setup-tox-python.outputs.python-path }}
         STEPS_SETUP_UV_OUTPUTS_UV_PATH: ${{ steps.setup-uv.outputs.uv-path }}
       run: |
         # Run tox
         path_prefix="${INPUT_PATH_PREFIX}"
         tox_envs="${INPUT_TOX_ENVS}"
         parallel="${INPUT_PARALLEL}"
+        caller_python="${STEPS_SETUP_PYTHON_OUTPUTS_PYTHON_PATH}"
 
         # -P resolves '..' after symlinks, as validation did; a logical
         # cd could land outside the directory validation approved
         cd -P -- "${GITHUB_WORKSPACE}/$path_prefix" || exit 1
 
-        # Install tox from the action's uv lock, on the Python set up
-        # above, into a virtual environment of its own. A bare install
-        # would take whatever tox PyPI served on the day. This runs in
-        # the caller's project, so nothing of the caller's may steer it:
-        # --no-config skips any uv.toml or [tool.uv] found here, and
-        # every UV_* variable goes, so none can redirect the index, the
-        # project or the environment. The subshell confines that to the
-        # install: tox and its commands still see the caller's UV_*.
+        # Install tox from the action's uv lock, on the host Python set
+        # up for it, into a virtual environment of its own. A bare
+        # install would take whatever tox PyPI served on the day. This
+        # runs in the caller's project, so nothing of the caller's may
+        # steer it: --no-config skips any uv.toml or [tool.uv] found
+        # here, and every UV_* variable goes, so none can redirect the
+        # index, the project or the environment. The subshell confines
+        # that to the install: tox and its commands still see the
+        # caller's UV_*.
         tox_venv=$(mktemp -d "${RUNNER_TEMP}/tox-venv.XXXXXX")
         (
             while IFS= read -r name; do
@@ -313,7 +331,7 @@ runs:
               "${STEPS_SETUP_UV_OUTPUTS_UV_PATH}" \
               sync --quiet --frozen --no-config --no-install-project \
               --no-build --project "${GITHUB_ACTION_PATH}/tox-lock" \
-              --python "${STEPS_SETUP_PYTHON_OUTPUTS_PYTHON_PATH}"
+              --python "${STEPS_SETUP_TOX_PYTHON_OUTPUTS_PYTHON_PATH}"
         )
         tox_bin="$tox_venv/bin"
         if [[ ! -d "$tox_bin" ]]; then
@@ -321,13 +339,50 @@ runs:
             tox_bin="$tox_venv/Scripts"
         fi
 
+        env_args=()
+        if [[ -n "$tox_envs" ]]; then
+            env_args+=(-e "$tox_envs")
+        fi
         tox_args=()
         # 'off', like an empty value, runs the environments in turn
         if [[ -n "$parallel" && "$parallel" != 'off' ]]; then
             tox_args+=(--parallel "$parallel" --parallel-live)
         fi
-        if [[ -n "$tox_envs" ]]; then
-            tox_args+=(-e "$tox_envs")
+        tox_args+=("${env_args[@]}")
+
+        # An environment without a Python factor, such as 'lint', runs
+        # on tox's default_base_python, which is the interpreter tox
+        # runs on: the host Python, not the caller's. Point it at the
+        # caller's Python instead, unless their configuration sets its
+        # own, which an override would replace. tox reports its own
+        # interpreter for every environment the caller leaves unset.
+        # The override names a version, not a path: tox only fetches
+        # the older virtualenv a Python such as 3.8 needs for a spec
+        # that carries a version.
+        if [[ -n "$caller_python" ]]; then
+            # Such as cpython3.12, or cpython3.14t when free-threaded
+            spec_py='import sys, sysconfig as s; v = sys.version_info
+        t = "t" if s.get_config_var("Py_GIL_DISABLED") else ""
+        print(f"{sys.implementation.name}{v[0]}.{v[1]}{t}")'
+            caller_spec=$("$caller_python" -c "$spec_py")
+            caller_spec="${caller_spec%$'\r'}"
+            tox_python=$("$tox_bin/python" -c 'import sys
+        print(sys.executable)')
+            tox_python="${tox_python%$'\r'}"
+            caller_set=''
+            while IFS= read -r line; do
+                line="${line%$'\r'}"
+                if [[ "$line" == 'default_base_python ='* && \
+                      "$line" != "default_base_python = $tox_python" ]]; then
+                    caller_set=1
+                fi
+            done < <("$tox_bin/tox" config "${env_args[@]}" \
+                       -k default_base_python)
+            if [[ -n "$caller_set" ]]; then
+                echo "ℹ️ Keeping the default_base_python tox.ini sets"
+            else
+                tox_args+=(-x "testenv.default_base_python=$caller_spec")
+            fi
         fi
 
         "$tox_bin/tox" "${tox_args[@]}"

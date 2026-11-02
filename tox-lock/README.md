@@ -7,12 +7,19 @@ SPDX-FileCopyrightText: 2026 The Linux Foundation
 
 The action installs tox from `uv.lock` in this directory. The project
 here exists to hold that lock and nothing else: it builds no package,
-and it lists `tox` as its one dependency.
+and it lists `tox` as its one dependency, with a lower bound.
 
-The lock covers every Python from 3.8 up, and picks the newest tox each
-version supports, so Python 3.8, 3.9 and 3.10 each get an older tox
-than 3.11 and later. It records a sha256 hash for every file, and the
-action installs it with `uv sync --frozen`, which never resolves again.
+tox runs on a pinned host Python, 3.13, that the action sets up for it
+alone, while test environments run on the caller's Python. Since tox
+itself runs on that host, the lock targets Python 3.11 and later, the
+versions current tox supports, and holds one version of each package
+with no `resolution-markers`. A lock that also covered older Pythons
+would hold an older copy of tox and its dependencies for each, and
+Dependabot would bump such a copy past the Python it serves. The lower
+bound on tox makes an update that cannot resolve fail, rather than fall
+back to an ancient tox. The lock records a sha256 hash for every file,
+and the action installs it with `uv sync --frozen`, which never
+resolves again.
 
 ## Maintenance
 

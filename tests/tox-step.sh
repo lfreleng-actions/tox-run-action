@@ -14,7 +14,9 @@
 # 'shell: bash', under an emptied environment. The run step gets stubs:
 # a "uv" that records its arguments and environment, and builds a
 # virtual environment holding a tox that records its own, so no case
-# installs or runs anything.
+# installs or runs anything. The step must install tox on the host
+# Python set up for it, and point environments without a Python factor
+# at the caller's Python unless the caller's tox.ini picks another.
 #
 # Usage: bash tests/tox-step.sh    (needs mikefarah yq v4 and bash)
 
@@ -60,32 +62,54 @@ extract 'Run tox' "${run}"
 ws="${work}/ws"
 mkdir -p "${ws}"
 : > "${ws}/tox.ini"
-# The workspace and path_prefix each case runs with, and directories put
-# ahead of PATH; every case puts them back afterwards
+stubs="${work}/stubs"
+# The workspace and path_prefix each case runs with, directories put
+# ahead of PATH, the caller's setup-python interpreter and any
+# default_base_python the caller's tox.ini sets; every case puts them
+# back afterwards
 workspace="${ws}"
 prefix='.'
 toolpath=''
+caller_python="${stubs}/interpreter"
+base_python=''
 
-# Stubs. 'interpreter' stands in for the setup-python interpreter, which
-# only uv may run. 'uv' logs its arguments, and then the UV_* variables
-# it sees, one per line, and puts the stub tox, which logs its own
-# arguments and the UV_* variables it sees, in the environment it was
-# given.
-stubs="${work}/stubs"
+# Stubs. 'host-python' stands in for the interpreter set up for tox,
+# which only uv may run. 'interpreter' stands in for the caller's
+# setup-python interpreter, and names its version as a CPython 3.10
+# would. 'uv' logs its arguments, and then the UV_* variables it sees,
+# one per line, and fills the environment it was given with a python
+# that prints its own path and the stub tox. 'tox config' logs its
+# arguments and reports default_base_python as tox does: the python
+# beside it, unless a case sets ${STUB_BASE_PYTHON} for the caller's
+# tox.ini. Any other tox call logs its arguments and the UV_* variables
+# it sees.
 mkdir -p "${stubs}"
-cat > "${stubs}/interpreter" << 'EOF'
+cat > "${stubs}/host-python" << 'EOF'
 #!/bin/sh
 exit 2
+EOF
+cat > "${stubs}/interpreter" << 'EOF'
+#!/bin/sh
+echo cpython3.10
 EOF
 cat > "${stubs}/uv" << 'EOF'
 #!/bin/sh
 for arg; do printf '%s\n' "$arg"; done > "${STUB_UV_LOG}"
 env | grep '^UV_' | sort > "${STUB_UV_ENV}"
 mkdir -p "${UV_PROJECT_ENVIRONMENT}/bin"
+printf '#!/bin/sh\necho "%s"\n' "${UV_PROJECT_ENVIRONMENT}/bin/python" \
+  > "${UV_PROJECT_ENVIRONMENT}/bin/python"
+chmod +x "${UV_PROJECT_ENVIRONMENT}/bin/python"
 cp "${STUB_DIR}/tox" "${UV_PROJECT_ENVIRONMENT}/bin/tox"
 EOF
 cat > "${stubs}/tox" << 'EOF'
 #!/bin/sh
+if [ "$1" = config ]; then
+  for arg; do printf '%s\n' "$arg"; done > "${TOX_CONFIG_LOG}"
+  printf '[testenv:check]\ndefault_base_python = %s\n' \
+    "${STUB_BASE_PYTHON:-$(dirname -- "$0")/python}"
+  exit 0
+fi
 for arg; do printf '%s\n' "$arg"; done > "${TOX_LOG}"
 pwd -P > "${TOX_CWD}"
 env | grep '^UV_' | sort > "${TOX_ENV}"
@@ -108,7 +132,9 @@ step() {
     STUB_UV_ENV="${work}/uv-env" \
     TOX_LOG="${work}/tox" TOX_ENV="${work}/tox-env" \
     TOX_CWD="${work}/cwd" GITHUB_STEP_SUMMARY="${work}/summary" \
-    STEPS_SETUP_PYTHON_OUTPUTS_PYTHON_PATH="${stubs}/interpreter" \
+    STEPS_SETUP_PYTHON_OUTPUTS_PYTHON_PATH="${caller_python}" \
+    STEPS_SETUP_TOX_PYTHON_OUTPUTS_PYTHON_PATH="${stubs}/host-python" \
+    STUB_BASE_PYTHON="${base_python}" TOX_CONFIG_LOG="${work}/tox-config" \
     STEPS_SETUP_UV_OUTPUTS_UV_PATH="${stubs}/uv" \
     UV_INDEX_URL='https://index.invalid/simple' \
     UV_PROJECT_ENVIRONMENT="${work}/caller-venv" \
@@ -128,6 +154,8 @@ report() {
   workspace="${ws}"
   prefix='.'
   toolpath=''
+  caller_python="${stubs}/interpreter"
+  base_python=''
 }
 
 # accept <tox-envs> <parallel>: validation passes and publishes no error
@@ -264,12 +292,36 @@ reject invalid-parallel '' '4x'
 reject invalid-parallel '' $'auto\n'
 
 echo '== tox command line'
-args 'py311,lint' 'auto' --parallel auto --parallel-live -e py311,lint
-args 'py311' '2' --parallel 2 --parallel-live -e py311
-args 'py311' 'off' -e py311
-args 'py311' '' -e py311
+# The caller's tox.ini leaves default_base_python unset, so the step
+# points it at the caller's Python
+over='testenv.default_base_python=cpython3.10'
+args 'py311,lint' 'auto' --parallel auto --parallel-live -e py311,lint \
+  -x "${over}"
+args 'py311' '2' --parallel 2 --parallel-live -e py311 -x "${over}"
+args 'py311' 'off' -e py311 -x "${over}"
+args 'py311' '' -e py311 -x "${over}"
+args '' 'auto' --parallel auto --parallel-live -x "${over}"
+args '' '' -x "${over}"
+
+echo '== default_base_python'
+# One the caller's tox.ini sets stays in force, even where it names the
+# caller's own interpreter
+base_python='python3.9'
+args 'py311,lint' '' -e py311,lint
+base_python="${stubs}/interpreter"
 args '' 'auto' --parallel auto --parallel-live
-args '' ''
+# Without a python-path from setup-python, tox keeps its own default
+caller_python=''
+args 'lint' '' -e lint
+
+cases=$((cases + 1))
+ok=1
+rm -f "${work}/tox-config"
+step "${run}" 'py311,lint' '' || ok=0
+# The step asks tox about the environments it then runs
+printf '%s\n' config -e py311,lint -k default_base_python > "${work}/want"
+cmp -s "${work}/want" "${work}/tox-config" 2> /dev/null || ok=0
+report "${ok}" "tox config reads default_base_python for the same envs"
 
 echo '== tox install'
 cases=$((cases + 1))
@@ -285,9 +337,16 @@ for flag in --frozen --no-config --no-install-project; do
   grep -sqxF -- "${flag}" "${work}/uv" || ok=0
 done
 grep -sqxF -- "${root}/tox-lock" "${work}/uv" || ok=0
-grep -sqxF -- "${stubs}/interpreter" "${work}/uv" || ok=0
 [ -f "${root}/tox-lock/uv.lock" ] || ok=0
 report "${ok}" "tox comes from the action's frozen uv lock, unconfigured"
+
+cases=$((cases + 1))
+ok=1
+step "${run}" '' '' || ok=0
+# tox runs on the host Python set up for it, not the caller's
+grep -sqxF -- "${stubs}/host-python" "${work}/uv" || ok=0
+! grep -sqxF -- "${stubs}/interpreter" "${work}/uv" || ok=0
+report "${ok}" "tox installs on the host Python set up for it"
 
 cases=$((cases + 1))
 ok=1

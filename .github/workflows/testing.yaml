@@ -176,6 +176,34 @@ jobs:
         shell: bash
         run: bash tests/tox-step.sh
 
+  check-tox-lock:
+    name: 'Check tox lock holds one set of versions'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 5
+    steps:
+      # yamllint disable-line rule:line-length
+      - uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43 # v2.22.3
+        with:
+          egress-policy: audit
+
+      - name: 'Checkout repository'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Fails a lock with per-Python sections, more than one tox, or a
+      # tox below the floor, such as a Dependabot update can produce.
+      # ubuntu-latest ships the Python 3.11+ the check needs.
+      - name: 'Check tox-lock/uv.lock'
+        shell: bash
+        run: python3 tests/check-tox-lock.py
+
+      - name: 'Test the check against broken locks'
+        shell: bash
+        run: bash tests/check-tox-lock-test.sh
+
   test-error-handling:
     name: 'Test error handling (${{ matrix.case }})'
     runs-on: ubuntu-latest

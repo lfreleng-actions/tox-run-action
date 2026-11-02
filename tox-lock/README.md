@@ -61,3 +61,11 @@ with per-Python sections. Change these together:
 - the floor stated in the repository's `README.md`.
 
 Then regenerate the lock as above.
+
+## Guard
+
+`tests/check-tox-lock.py` runs on every pull request, Dependabot's
+included, and fails when `uv.lock` has any `resolution-markers`, holds
+more than one tox, or holds a tox below the `tox>=` bound. A failure
+there means an update needs a newer Python than the floor: raise the
+floor as above rather than accept a lock with per-Python sections.

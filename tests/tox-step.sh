@@ -7,7 +7,8 @@
 # inside the workspace, through any symlink, and reject any tox-envs or
 # parallel value that could reach the tox command line as an option;
 # the run step must hand what it accepts to tox as separate arguments,
-# whatever the value contains.
+# whatever the value contains. The Python check must refuse to run tox
+# on an interpreter older than the lock's floor.
 #
 # As in tests/pre-build-script.sh, yq extracts each step's run block
 # from action.yaml and bash runs it with the flags GitHub uses for
@@ -53,7 +54,9 @@ extract() {
 validate="${work}/validate.sh"
 detect="${work}/detect.sh"
 run="${work}/run.sh"
+check="${work}/check.sh"
 extract 'Validate action/environment' "${validate}"
+extract 'Check Python version' "${check}"
 extract 'Detect dependency management tool' "${detect}"
 extract 'Run tox' "${run}"
 
@@ -91,6 +94,8 @@ pwd -P > "${TOX_CWD}"
 env | grep '^UV_' | sort > "${TOX_ENV}"
 EOF
 chmod +x "${stubs}"/*
+# The interpreter setup-python reports, which every case puts back
+python="${stubs}/interpreter"
 
 # step <script> <tox-envs> <parallel>: run a step as the runner would,
 # leaving its output in ${work}/out and its error output in
@@ -108,7 +113,7 @@ step() {
     STUB_UV_ENV="${work}/uv-env" \
     TOX_LOG="${work}/tox" TOX_ENV="${work}/tox-env" \
     TOX_CWD="${work}/cwd" GITHUB_STEP_SUMMARY="${work}/summary" \
-    STEPS_SETUP_PYTHON_OUTPUTS_PYTHON_PATH="${stubs}/interpreter" \
+    STEPS_SETUP_PYTHON_OUTPUTS_PYTHON_PATH="${python}" \
     STEPS_SETUP_UV_OUTPUTS_UV_PATH="${stubs}/uv" \
     UV_INDEX_URL='https://index.invalid/simple' \
     UV_PROJECT_ENVIRONMENT="${work}/caller-venv" \
@@ -128,6 +133,7 @@ report() {
   workspace="${ws}"
   prefix='.'
   toolpath=''
+  python="${stubs}/interpreter"
 }
 
 # accept <tox-envs> <parallel>: validation passes and publishes no error
@@ -262,6 +268,74 @@ reject invalid-parallel '' '-1'
 reject invalid-parallel '' '1 --notest'
 reject invalid-parallel '' '4x'
 reject invalid-parallel '' $'auto\n'
+
+# python_reports <version> [<eol>]: setup-python's interpreter prints
+# <version>, as Python does for the version query the check step makes,
+# ending the line with <eol>, a printf escape: '\n' by default, or
+# '\r\n' as Python on Windows does
+python_reports() {
+  python="${work}/python"
+  printf '#!/bin/sh\nprintf "%%s%s" "%s"\n' "${2:-\\n}" "$1" \
+    > "${python}"
+  chmod +x "${python}"
+}
+
+# python_ok <label>: the check step passes and publishes no error
+python_ok() {
+  local ok=1
+  cases=$((cases + 1))
+  step "${check}" '' '' || ok=0
+  ! grep -q '^error=' "${work}/output" || ok=0
+  report "${ok}" "accept ${1}"
+}
+
+# python_bad <label>: the check step fails with error=unsupported-python
+python_bad() {
+  local ok=1
+  cases=$((cases + 1))
+  ! step "${check}" '' '' || ok=0
+  grep -qxF 'error=unsupported-python' "${work}/output" || ok=0
+  report "${ok}" "reject ${1} as unsupported-python"
+}
+
+echo '== Python version'
+python_reports '3.10'
+python_bad 'Python 3.10, below the floor'
+python_reports '2.7'
+python_bad 'Python 2.7'
+python_reports '3.11'
+python_ok 'Python 3.11, the floor'
+python_reports '3.14'
+python_ok 'Python 3.14'
+python_reports '4.0'
+python_ok 'Python 4.0'
+python_reports '3.12' '\r\n'
+python_ok 'Python 3.12 printed with CRLF, as on Windows'
+python_reports '3.10' '\r\n'
+python_bad 'Python 3.10 printed with CRLF, as on Windows'
+python_reports 'Python 3.12'
+python_bad 'an unparsable version'
+python_reports ''
+python_bad 'an empty version'
+# stubs/interpreter exits non-zero without printing anything
+python_bad 'an interpreter that fails'
+python=''
+python_ok 'no interpreter from setup-python, leaving uv to pick one'
+# The check and the lock must agree on the floor: the lock's
+# requires-python passes and the minor version below it fails
+floor="$(sed -n 's/^requires-python = ">=\([0-9.]*\)"$/\1/p' \
+  "${root}/tox-lock/pyproject.toml")"
+if [[ "${floor}" =~ ^([0-9]+)\.([0-9]+)$ ]]; then
+  python_reports "${floor}"
+  python_ok "Python ${floor}, the lock's requires-python"
+  python_reports "${BASH_REMATCH[1]}.$((BASH_REMATCH[2] - 1))"
+  python_bad "Python ${BASH_REMATCH[1]}.$((BASH_REMATCH[2] - 1))"
+else
+  cases=$((cases + 1))
+  : > "${work}/out"
+  : > "${work}/output"
+  report 0 "tox-lock/pyproject.toml sets requires-python as '>=X.Y'"
+fi
 
 echo '== tox command line'
 args 'py311,lint' 'auto' --parallel auto --parallel-live -e py311,lint

@@ -6,8 +6,13 @@
 [project]
 name = "tox-run-action-tox"
 version = "0"
-requires-python = ">=3.8"
-dependencies = ["tox"]
+# The oldest Python every locked package supports, so the lock holds a
+# single set of versions. The 'Check Python version' step in action.yaml
+# holds the same floor: raise the two together. The lower bound on tox
+# makes an update that drops a supported Python fail to resolve, rather
+# than fall back to an ancient tox.
+requires-python = ">=3.11"
+dependencies = ["tox>=4.67"]
 
 [tool.uv]
 package = false

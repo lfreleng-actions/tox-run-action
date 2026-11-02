@@ -19,9 +19,15 @@ execution, and custom build scripts.
 This action requires:
 
 - **tox.ini**: Must exist in the project directory
+- **Python 3.11 or newer** to run tox: the interpreter `python-version`
+  or `python-version-file` sets up. When `python-version` lists more
+  than one version, the last one listed runs tox, so list the newest
+  last
 
 The action installs tox itself, from a hashed lock file, so the runner
-needs no tox or `pipx` of its own.
+needs no tox or `pipx` of its own. Tox environments for older Pythons,
+such as `py39` or `py310`, still work whenever those interpreters are
+on `PATH`: the 3.11 floor applies to the interpreter that runs tox.
 
 ## Usage Example
 
@@ -71,7 +77,7 @@ steps:
 | Name                | Required | Default | Description                                                        |
 | ------------------- | -------- | ------- | ------------------------------------------------------------------ |
 | path_prefix         | False    | '.'     | Directory containing tox.ini, inside the workspace                 |
-| python-version      | False    | -       | Version of Python to use                                           |
+| python-version      | False    | -       | Version of Python to use; 3.11 or newer, the newest listed last    |
 | python-version-file | False    | -       | File holding the Python version, relative to the workspace root    |
 | tox-envs            | False    | -       | Comma-separated tox envs to run on this py-version; no spaces      |
 | parallel            | False    | 'auto'  | Parallel processes: auto, all, a number, or off/empty              |
@@ -106,6 +112,7 @@ The action fails at the first input check that does not pass, and sets
 | `tox.ini` not readable                        | unreadable-tox-ini            |
 | `tox-envs` not comma-separated env names      | invalid-tox-envs              |
 | `parallel` not auto, all, off or a number     | invalid-parallel              |
+| Python set up to run tox older than 3.11      | unsupported-python            |
 | `pre-build-script` path contains `..`         | script-path-traversal         |
 | `pre-build-script` name lacks `.sh` suffix    | script-not-sh                 |
 | `pre-build-script` path does not resolve      | script-unresolved             |
@@ -122,7 +129,8 @@ The action performs the following steps:
 1. **Directory Validation**: Verifies that `path_prefix` exists and contains a
    `tox.ini` file before proceeding
 2. **Python Setup**: Configures the specified Python version using
-   `actions/setup-python`
+   `actions/setup-python`, and checks that the interpreter that will run
+   tox is Python 3.11 or newer
 3. **Pre-build Script**: Executes an optional pre-build script if provided
 4. **Dependency Detection**: Automatically detects the dependency management
    tool (uv, PDM, Poetry, Pipenv, pip-tools, or pip) and outputs it as
@@ -153,8 +161,9 @@ environments. The action does not install dependencies directly.
 
 - The action installs tox from `tox-lock/uv.lock`, a uv lock with a
   hash for every file, into a virtual environment of its own. The
-  lock picks the newest tox that supports the configured Python, so
-  Python 3.8 to 3.10 get an older tox than 3.11 and later. The install
+  lock holds one tox, for Python 3.11 and newer, the oldest Python
+  current tox supports; on an older interpreter the action stops with
+  `unsupported-python` before installing anything. The install
   ignores any uv configuration and `UV_*` variables in the caller's
   project, though tox and its commands still see those variables.
   On Windows, `setup-uv` sets `UV_TOOL_DIR` and `UV_TOOL_BIN_DIR` for
@@ -199,7 +208,9 @@ environments. The action does not install dependencies directly.
 - If neither `python-version` nor `python-version-file` specifies a version,
   `actions/setup-python` uses the version from a `.python-version` file
   at the workspace root, not in `path_prefix`, if present, or falls
-  back to the system default.
+  back to the system default. With no version set up, the action
+  skips its Python check and uv picks a Python 3.11 or newer for tox,
+  downloading one if the runner has none.
 - You can explicitly specify a file to determine the Python version using
   `python-version-file`, relative to the workspace root. Supported
   formats include `.python-version`, `pyproject.toml`, `.tool-versions`,

@@ -225,6 +225,9 @@ jobs:
           - case: 'parallel carrying an option'
             parallel: '1 --notest'
             error: 'invalid-parallel'
+          - case: 'Python older than tox supports'
+            python: '3.10'
+            error: 'unsupported-python'
     steps:
       # yamllint disable-line rule:line-length
       - uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43 # v2.22.3
@@ -271,6 +274,7 @@ jobs:
         continue-on-error: true
         with:
           path_prefix: ${{ matrix.path_prefix || 'test-python-project' }}
+          python-version: ${{ matrix.python }}
           pre-build-script: ${{ matrix.script }}
           tox-envs: ${{ matrix.tox_envs }}
           parallel: ${{ matrix.parallel || 'auto' }}
@@ -324,18 +328,22 @@ jobs:
 
   test-tox-lock:
     name: 'Test tox lock on Python ${{ matrix.python }}'
-    # Pinned, not -latest: 3.8 and 3.9 have no build for Ubuntu 26.04,
-    # and this job needs every interpreter in the matrix.
+    # Pinned, not -latest, so every interpreter in the matrix has a
+    # build for the runner image.
     runs-on: ubuntu-24.04
     permissions:
       contents: read
     timeout-minutes: 10
     strategy:
       fail-fast: false
-      # tox-lock/uv.lock resolves a different tox per interpreter
-      # below 3.11; one from each of its branches, and the newest.
+      # tox-lock/uv.lock holds one tox for Python 3.11 and newer; each
+      # of those must install and run it. An older Python must stop the
+      # action before it installs anything.
       matrix:
-        python: ['3.8', '3.9', '3.10', '3.11', '3.14']
+        python: ['3.11', '3.12', '3.13', '3.14']
+        include:
+          - python: '3.10'
+            error: 'unsupported-python'
     steps:
       # yamllint disable-line rule:line-length
       - uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43 # v2.22.3
@@ -353,7 +361,31 @@ jobs:
 
       - name: 'Run tox installed from the lock'
         uses: $/
+        id: action
+        continue-on-error: true
         with:
           path_prefix: 'lock-test'
           python-version: ${{ matrix.python }}
           tox-envs: 'check'
+
+      - name: 'Verify the outcome'
+        shell: bash
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+          ERROR: ${{ steps.action.outputs.error }}
+          EXPECTED: ${{ matrix.error }}
+        run: |
+          # Verify the outcome
+          if [[ -z "$EXPECTED" ]]; then
+            if [[ "$OUTCOME" != 'success' ]]; then
+              echo "::error::Wanted success, got $OUTCOME with error=$ERROR"
+              exit 1
+            fi
+            echo "✅ tox from the lock ran"
+          elif [[ "$OUTCOME" != 'failure' || "$ERROR" != "$EXPECTED" ]]; then
+            echo "::error::Wanted failure with error=$EXPECTED," \
+                 "got $OUTCOME with error=$ERROR"
+            exit 1
+          else
+            echo "✅ Action failed with error=$EXPECTED"
+          fi

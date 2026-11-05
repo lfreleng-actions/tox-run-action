@@ -137,8 +137,8 @@ The action performs the following steps:
    `build-backend`
 5. **Tox Execution**: Installs uv with `astral-sh/setup-uv`, uses it to
    install tox from `tox-lock/uv.lock` into a virtual environment on the
-   configured Python, then runs tox with the specified environments and
-   parallel settings
+   configured Python (or, with none configured, a Python uv installs),
+   then runs tox with the specified environments and parallel settings
 
 The action automatically handles:
 
@@ -166,11 +166,24 @@ environments. The action does not install dependencies directly.
   `unsupported-python` before installing anything. The install
   ignores any uv configuration and `UV_*` variables in the caller's
   project, though tox and its commands still see those variables.
-  On Windows, `setup-uv` sets `UV_TOOL_DIR` and `UV_TOOL_BIN_DIR` for
-  the rest of the job; the action passes it any values the workflow
-  sets in `env`, so those stay as they were.
-  Dependabot keeps the lock current; `tox-lock/README.md` describes
-  how to refresh it by hand
+  uv takes the interpreter that runs tox by absolute path, and tox
+  starts from it with `python -I`, so no `PYTHON*` variable,
+  `VIRTUAL_ENV`, `PATH` entry or module in the project directory
+  chooses or alters it. Dependabot keeps the lock current;
+  `tox-lock/README.md` describes how to refresh it by hand
+- `setup-uv` runs from the action's own directory with its Python
+  lookup disabled, and puts `$RUNNER_TEMP/tox-run-action/bin` on
+  `PATH` for the rest of the job, exporting `UV_TOOL_BIN_DIR` naming
+  it, rather than a directory from the caller's `HOME`, `XDG_BIN_HOME`
+  or `UV_TOOL_BIN_DIR`. On Windows, where `setup-uv` sets
+  `UV_TOOL_DIR` and `UV_TOOL_BIN_DIR` for the rest of the job, the
+  action passes it any values the workflow sets in `env`, so those
+  stay as they were
+- The action trusts the caller's `PATH` for everything but Python: the
+  runner and `setup-uv` start `bash`, `tar` and other tools from it,
+  and `setup-uv` starts a bare `uv` from it when the job sets
+  `UV_NO_MODIFY_PATH`. Do not let untrusted code change `PATH` or set
+  that variable before this action runs
 - Tox handles package building internally when `tox.ini` sets
   `isolated_build = True`
 - When `tox-envs` is not specified, tox will run its default environments
@@ -209,8 +222,9 @@ environments. The action does not install dependencies directly.
   `actions/setup-python` uses the version from a `.python-version` file
   at the workspace root, not in `path_prefix`, if present, or falls
   back to the system default. With no version set up, the action
-  skips its Python check and uv picks a Python 3.11 or newer for tox,
-  downloading one if the runner has none.
+  skips its Python check, and uv installs a Python 3.13 of its own,
+  outside `PATH`, under `$RUNNER_TEMP/tox-run-action`, to run tox.
+  Tox environments without a `basepython` then run on that Python.
 - You can explicitly specify a file to determine the Python version using
   `python-version-file`, relative to the workspace root. Supported
   formats include `.python-version`, `pyproject.toml`, `.tool-versions`,

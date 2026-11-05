@@ -163,12 +163,15 @@ runs:
         python="${STEPS_SETUP_PYTHON_OUTPUTS_PYTHON_PATH}"
         if [[ -z "$python" ]]; then
           # With no version to set up, setup-python leaves the runner's
-          # Python in place and uv picks one that meets the floor
-          echo "ℹ️ No Python set up; uv picks Python $floor or newer for tox"
+          # Python in place, and 'Install Python' provides tox's own
+          echo "ℹ️ No Python set up; the action installs its own for tox"
           exit 0
         fi
 
-        version=$("$python" -c \
+        # -I ignores PYTHON* variables and the working directory; macOS
+        # reads these two even then
+        unset PYTHONEXECUTABLE __PYVENV_LAUNCHER__
+        version=$("$python" -I -c \
           'import sys; print("%d.%d" % sys.version_info[:2])' \
           2> /dev/null) || true
         # Python on Windows ends the line with CRLF, and command
@@ -191,18 +194,73 @@ runs:
         echo "✅ Python $version can run tox"
 
     # 'Run tox' uses uv to install tox from the action's own lock.
-    # No cache: this action runs in other repositories' jobs.
-    # On Windows, setup-uv sets UV_TOOL_DIR and UV_TOOL_BIN_DIR for the
-    # rest of the job unless given them, so hand it the caller's own.
+    # setup-uv's only uv call for these inputs is "uv python find",
+    # whose result it executes. An invalid preference makes uv refuse
+    # its arguments before any lookup; setup-uv then reports the
+    # Python version as "unknown", which nothing reads.
+    # setup-uv puts tool-bin-dir on PATH, so it is the action's own
+    # directory, not one the caller's HOME, XDG_* or UV_TOOL_BIN_DIR
+    # names. On Windows setup-uv replaces UV_TOOL_DIR and
+    # UV_TOOL_BIN_DIR for the rest of the job unless given them, so
+    # there it keeps any the caller sets.
     - name: 'Install uv'
       id: setup-uv
       # yamllint disable-line rule:line-length
       uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
       with:
         version: '0.13.4'
+        working-directory: ${{ github.action_path }}
+        # The post-step "uv cache prune" would hit the invalid
+        # preference; no cache either way, as this runs in other
+        # repositories' jobs
         enable-cache: false
-        tool-dir: ${{ env.UV_TOOL_DIR }}
-        tool-bin-dir: ${{ env.UV_TOOL_BIN_DIR }}
+        tool-dir: ${{ runner.os == 'Windows' && env.UV_TOOL_DIR || '' }}
+        # yamllint disable-line rule:line-length
+        tool-bin-dir: ${{ runner.os == 'Windows' && env.UV_TOOL_BIN_DIR || format('{0}/tox-run-action/bin', runner.temp) }}
+      env:
+        UV_NO_CONFIG: '1'
+        UV_NO_PROJECT: '1'
+        UV_PYTHON_PREFERENCE: 'lookup-disabled'
+        # Inherited, it makes setup-uv probe uv, which the line above fails
+        UV_PYTHON_ARCH: ''
+        UV_PYTHON_INSTALL_DIR: ${{ runner.temp }}/tox-run-action/python
+
+    # Without a Python from setup-python, tox needs a trusted one: uv
+    # installs its own pinned, hash-checked build. uv runs with an
+    # empty environment plus an allow-list, so no caller variable can
+    # pick or redirect the interpreter.
+    - name: 'Install Python'
+      id: python
+      if: ${{ steps.setup-python.outputs.python-path == '' }}
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      env:
+        UV: ${{ steps.setup-uv.outputs.uv-path }}
+        INSTALL_DIR: ${{ runner.temp }}/tox-run-action/python
+        CACHE_DIR: ${{ runner.temp }}/tox-run-action/cache
+        PYTHON_VERSION: '3.13'
+      run: |
+        # Install Python
+        clean=(UV_NO_CONFIG=1 UV_NO_PROJECT=1
+          "UV_PYTHON_INSTALL_DIR=$INSTALL_DIR" "UV_CACHE_DIR=$CACHE_DIR")
+        # SYSTEMROOT lets uv reach the network on Windows
+        for name in HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY http_proxy \
+            https_proxy all_proxy no_proxy SSL_CERT_FILE SSL_CERT_DIR \
+            UV_NATIVE_TLS SYSTEMROOT; do
+          if [ -n "${!name+set}" ]; then clean+=("$name=${!name}"); fi
+        done
+        /usr/bin/env -i "${clean[@]}" "$UV" python install --quiet \
+          --no-bin "$PYTHON_VERSION"
+        PYTHON=$(/usr/bin/env -i "${clean[@]}" "$UV" python find \
+          --managed-python "$PYTHON_VERSION")
+        # Windows mixes separators: compare with forward slashes only
+        case "${PYTHON//\\//}" in
+          "${INSTALL_DIR//\\//}"/*) ;;
+          *) echo "Error: uv found Python outside its install directory ❌"
+             exit 1 ;;
+        esac
+        echo "✅ Python $PYTHON_VERSION installed for tox"
+        echo "path=$PYTHON" >> "$GITHUB_OUTPUT"
 
     - name: 'Run pre-build-script'
       id: pre-build
@@ -339,7 +397,7 @@ runs:
         INPUT_TOX_ENVS: ${{ inputs.tox-envs }}
         INPUT_PARALLEL: ${{ inputs.parallel }}
         # yamllint disable-line rule:line-length
-        STEPS_SETUP_PYTHON_OUTPUTS_PYTHON_PATH: ${{ steps.setup-python.outputs.python-path }}
+        PYTHON: ${{ steps.setup-python.outputs.python-path || steps.python.outputs.path }}
         STEPS_SETUP_UV_OUTPUTS_UV_PATH: ${{ steps.setup-uv.outputs.uv-path }}
       run: |
         # Run tox
@@ -347,18 +405,24 @@ runs:
         tox_envs="${INPUT_TOX_ENVS}"
         parallel="${INPUT_PARALLEL}"
 
+        if [[ -z "$PYTHON" ]]; then
+          echo "❌ Error: No Python to run tox"
+          exit 1
+        fi
+
         # -P resolves '..' after symlinks, as validation did; a logical
         # cd could land outside the directory validation approved
         cd -P -- "${GITHUB_WORKSPACE}/$path_prefix" || exit 1
 
-        # Install tox from the action's uv lock, on the Python set up
-        # above, into a virtual environment of its own. A bare install
-        # would take whatever tox PyPI served on the day. This runs in
-        # the caller's project, so nothing of the caller's may steer it:
-        # --no-config skips any uv.toml or [tool.uv] found here, and
-        # every UV_* variable goes, so none can redirect the index, the
-        # project or the environment. The subshell confines that to the
-        # install: tox and its commands still see the caller's UV_*.
+        # Install tox from the action's uv lock, on the Python chosen
+        # above by absolute path, into a virtual environment of its own.
+        # A bare install would take whatever tox PyPI served on the day.
+        # This runs in the caller's project, so nothing of the caller's
+        # may steer it: --no-config skips any uv.toml or [tool.uv] found
+        # here, and every UV_* variable goes, so none can redirect the
+        # index, the project or the environment. The subshell confines
+        # that to the install: tox and its commands still see the
+        # caller's UV_*.
         tox_venv=$(mktemp -d "${RUNNER_TEMP}/tox-venv.XXXXXX")
         (
             while IFS= read -r name; do
@@ -368,7 +432,7 @@ runs:
               "${STEPS_SETUP_UV_OUTPUTS_UV_PATH}" \
               sync --quiet --frozen --no-config --no-install-project \
               --no-build --project "${GITHUB_ACTION_PATH}/tox-lock" \
-              --python "${STEPS_SETUP_PYTHON_OUTPUTS_PYTHON_PATH}"
+              --python "$PYTHON"
         )
         tox_bin="$tox_venv/bin"
         if [[ ! -d "$tox_bin" ]]; then
@@ -385,4 +449,9 @@ runs:
             tox_args+=(-e "$tox_envs")
         fi
 
-        "$tox_bin/tox" "${tox_args[@]}"
+        # tox starts from its environment's own Python with -I, so no
+        # PYTHON* variable or module in this directory reaches it; macOS
+        # reads these two even under -I. tox and its commands still see
+        # the caller's other variables.
+        unset PYTHONEXECUTABLE __PYVENV_LAUNCHER__
+        "$tox_bin/python" -I -m tox "${tox_args[@]}"

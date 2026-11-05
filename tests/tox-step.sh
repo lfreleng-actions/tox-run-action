@@ -14,8 +14,9 @@
 # from action.yaml and bash runs it with the flags GitHub uses for
 # 'shell: bash', under an emptied environment. The run step gets stubs:
 # a "uv" that records its arguments and environment, and builds a
-# virtual environment holding a tox that records its own, so no case
-# installs or runs anything.
+# virtual environment whose Python stands in for tox and records its
+# own, so no case installs or runs anything. The Install Python step
+# runs against a "uv" that records the environment it gets.
 #
 # Usage: bash tests/tox-step.sh    (needs mikefarah yq v4 and bash)
 
@@ -59,6 +60,8 @@ extract 'Validate action/environment' "${validate}"
 extract 'Check Python version' "${check}"
 extract 'Detect dependency management tool' "${detect}"
 extract 'Run tox' "${run}"
+install="${work}/install.sh"
+extract 'Install Python' "${install}"
 
 ws="${work}/ws"
 mkdir -p "${ws}"
@@ -71,9 +74,10 @@ toolpath=''
 
 # Stubs. 'interpreter' stands in for the setup-python interpreter, which
 # only uv may run. 'uv' logs its arguments, and then the UV_* variables
-# it sees, one per line, and puts the stub tox, which logs its own
-# arguments and the UV_* variables it sees, in the environment it was
-# given.
+# it sees, one per line, and puts the stub Python in the environment it
+# was given. Started as 'python -I -m tox', that stub logs tox's
+# arguments, and the UV_* and macOS launcher variables it sees; started
+# any other way, it logs how instead.
 stubs="${work}/stubs"
 mkdir -p "${stubs}"
 cat > "${stubs}/interpreter" << 'EOF'
@@ -85,13 +89,19 @@ cat > "${stubs}/uv" << 'EOF'
 for arg; do printf '%s\n' "$arg"; done > "${STUB_UV_LOG}"
 env | grep '^UV_' | sort > "${STUB_UV_ENV}"
 mkdir -p "${UV_PROJECT_ENVIRONMENT}/bin"
-cp "${STUB_DIR}/tox" "${UV_PROJECT_ENVIRONMENT}/bin/tox"
+cp "${STUB_DIR}/tox" "${UV_PROJECT_ENVIRONMENT}/bin/python"
 EOF
 cat > "${stubs}/tox" << 'EOF'
 #!/bin/sh
+if [ "$1" != '-I' ] || [ "$2" != '-m' ] || [ "$3" != 'tox' ]; then
+  echo "not started as python -I -m tox: $*" > "${TOX_LOG}"
+  exit 0
+fi
+shift 3
 for arg; do printf '%s\n' "$arg"; done > "${TOX_LOG}"
 pwd -P > "${TOX_CWD}"
-env | grep '^UV_' | sort > "${TOX_ENV}"
+env | grep -E '^(UV_|PYTHONEXECUTABLE=|__PYVENV_LAUNCHER__=)' | sort \
+  > "${TOX_ENV}"
 EOF
 chmod +x "${stubs}"/*
 # The interpreter setup-python reports, which every case puts back
@@ -100,7 +110,8 @@ python="${stubs}/interpreter"
 # step <script> <tox-envs> <parallel>: run a step as the runner would,
 # leaving its output in ${work}/out and its error output in
 # ${work}/output. The caller's environment carries UV_* variables that
-# would redirect uv's index and environment if they reached it.
+# would redirect uv's index and environment if they reached it, and the
+# variables macOS reads to pick an interpreter even under -I.
 step() {
   : > "${work}/output"
   rm -rf "${work}/tmp"
@@ -114,6 +125,9 @@ step() {
     TOX_LOG="${work}/tox" TOX_ENV="${work}/tox-env" \
     TOX_CWD="${work}/cwd" GITHUB_STEP_SUMMARY="${work}/summary" \
     STEPS_SETUP_PYTHON_OUTPUTS_PYTHON_PATH="${python}" \
+    PYTHON="${python}" PY_ARGS="${work}/py-args" \
+    PYTHONEXECUTABLE="${stubs}/interpreter" \
+    __PYVENV_LAUNCHER__="${stubs}/interpreter" \
     STEPS_SETUP_UV_OUTPUTS_UV_PATH="${stubs}/uv" \
     UV_INDEX_URL='https://index.invalid/simple' \
     UV_PROJECT_ENVIRONMENT="${work}/caller-venv" \
@@ -272,11 +286,16 @@ reject invalid-parallel '' $'auto\n'
 # python_reports <version> [<eol>]: setup-python's interpreter prints
 # <version>, as Python does for the version query the check step makes,
 # ending the line with <eol>, a printf escape: '\n' by default, or
-# '\r\n' as Python on Windows does
+# '\r\n' as Python on Windows does. It logs its arguments, and any
+# macOS launcher variable it sees, to ${work}/py-args.
 python_reports() {
   python="${work}/python"
-  printf '#!/bin/sh\nprintf "%%s%s" "%s"\n' "${2:-\\n}" "$1" \
-    > "${python}"
+  cat > "${python}" << 'EOF'
+#!/bin/sh
+for arg; do printf '%s\n' "$arg"; done > "$PY_ARGS"
+env | grep -E '^(PYTHONEXECUTABLE|__PYVENV_LAUNCHER__)=' >> "$PY_ARGS"
+EOF
+  printf 'printf "%%s%s" "%s"\n' "${2:-\\n}" "$1" >> "${python}"
   chmod +x "${python}"
 }
 
@@ -320,7 +339,15 @@ python_bad 'an empty version'
 # stubs/interpreter exits non-zero without printing anything
 python_bad 'an interpreter that fails'
 python=''
-python_ok 'no interpreter from setup-python, leaving uv to pick one'
+python_ok 'no interpreter from setup-python, leaving Install Python one'
+# The query runs isolated: -I first, and no launcher variable
+python_reports '3.12'
+cases=$((cases + 1))
+ok=1
+step "${check}" '' '' || ok=0
+[ "$(head -n 1 "${work}/py-args" 2> /dev/null)" = '-I' ] || ok=0
+! grep -q '=' "${work}/py-args" 2> /dev/null || ok=0
+report "${ok}" 'the version query runs python -I, launcher variables unset'
 # The check and the lock must agree on the floor: the lock's
 # requires-python passes and the minor version below it fails
 floor="$(sed -n 's/^requires-python = ">=\([0-9.]*\)"$/\1/p' \
@@ -365,26 +392,169 @@ report "${ok}" "tox comes from the action's frozen uv lock, unconfigured"
 
 cases=$((cases + 1))
 ok=1
-step "${run}" '' '' || ok=0
-# tox and the commands it runs keep the caller's UV_* variables, which
-# a tox environment may pass through to its own uv
-printf '%s\n' "UV_INDEX_URL=https://index.invalid/simple" \
-  "UV_PROJECT_ENVIRONMENT=${work}/caller-venv" > "${work}/want"
-cmp -s "${work}/want" "${work}/tox-env" 2> /dev/null || ok=0
-report "${ok}" "tox sees the caller's UV_* variables"
+python=''
+rm -f "${work}/uv"
+! step "${run}" '' '' || ok=0
+[ ! -f "${work}/uv" ] || ok=0
+report "${ok}" "with no Python to run tox, the run step stops before uv"
 
 cases=$((cases + 1))
 ok=1
-# On Windows setup-uv replaces UV_TOOL_DIR and UV_TOOL_BIN_DIR unless
-# its inputs carry them, so the step must pass on the caller's values
-for pair in 'tool-dir UV_TOOL_DIR' 'tool-bin-dir UV_TOOL_BIN_DIR'; do
-  read -r input var <<< "${pair}"
-  value="$(INPUT="${input}" yq \
-    '.runs.steps[] | select(.id == "setup-uv") | .with[strenv(INPUT)]' \
-    "${root}/action.yaml" 2> /dev/null)" || ok=0
-  [ "${value}" = "\${{ env.${var} }}" ] || ok=0
+step "${run}" '' '' || ok=0
+# tox and the commands it runs keep the caller's UV_* variables, which
+# a tox environment may pass through to its own uv, but not the macOS
+# launcher variables
+printf '%s\n' "UV_INDEX_URL=https://index.invalid/simple" \
+  "UV_PROJECT_ENVIRONMENT=${work}/caller-venv" > "${work}/want"
+cmp -s "${work}/want" "${work}/tox-env" 2> /dev/null || ok=0
+report "${ok}" "tox sees the caller's UV_* variables, not the launcher ones"
+
+echo '== setup-uv and interpreter contract'
+# setup_uv <query>: the yq <query> applied to the setup-uv step
+setup_uv() {
+  QUERY="$1" yq -r \
+    '.runs.steps[] | select(.id == "setup-uv") | eval(strenv(QUERY))' \
+    "${root}/action.yaml" 2> /dev/null
+}
+
+cases=$((cases + 1))
+ok=1
+# setup-uv's own "uv python find" must fail before any lookup, from the
+# action's directory, and put only the action's own directory on PATH
+# (on Windows, the caller's own when it sets one). Nothing else may be
+# set: a python-version input or UV_SYSTEM_PYTHON, UV_MANAGED_PYTHON or
+# UV_NO_MODIFY_PATH would reopen a lookup or leak to later steps.
+[ "$(setup_uv '.with | keys | sort | join(" ")')" = \
+  'enable-cache tool-bin-dir tool-dir version working-directory' ] || ok=0
+want='UV_NO_CONFIG UV_NO_PROJECT UV_PYTHON_ARCH UV_PYTHON_INSTALL_DIR'
+[ "$(setup_uv '.env | keys | sort | join(" ")')" = \
+  "${want} UV_PYTHON_PREFERENCE" ] || ok=0
+want="\${{ runner.os == 'Windows' && env.UV_TOOL_BIN_DIR || "
+want+="format('{0}/tox-run-action/bin', runner.temp) }}"
+[ "$(setup_uv '.with.tool-bin-dir')" = "${want}" ] || ok=0
+while read -r key want; do
+  [ "$(setup_uv ".${key}")" = "${want}" ] || ok=0
+done << 'EOF'
+with.working-directory ${{ github.action_path }}
+with.enable-cache false
+with.tool-dir ${{ runner.os == 'Windows' && env.UV_TOOL_DIR || '' }}
+env.UV_NO_CONFIG 1
+env.UV_NO_PROJECT 1
+env.UV_PYTHON_PREFERENCE lookup-disabled
+env.UV_PYTHON_ARCH
+env.UV_PYTHON_INSTALL_DIR ${{ runner.temp }}/tox-run-action/python
+EOF
+report "${ok}" "setup-uv runs no lookup and adds only its own dir to PATH"
+
+# Every run block, with continuation lines joined and comments dropped
+yq -r '.runs.steps[] | select(has("run")) | .run' "${root}/action.yaml" |
+  sed -e ':a' -e '/\\$/N' -e 's/\\\n//' -e 'ta' |
+  grep -v '^[[:space:]]*#' > "${work}/runs"
+
+cases=$((cases + 1))
+ok=1
+# uv runs only through setup-uv's uv-path, never from PATH, and each
+# call names its Python by absolute path or runs with an empty
+# environment
+for var in UV STEPS_SETUP_UV_OUTPUTS_UV_PATH; do
+  VAR="${var}" yq -r '.runs.steps[] | .env[strenv(VAR)] | select(. != null)' \
+    "${root}/action.yaml" > "${work}/uv-vars"
+  [ -s "${work}/uv-vars" ] || ok=0
+  ! grep -vxF "\${{ steps.setup-uv.outputs.uv-path }}" \
+    "${work}/uv-vars" > /dev/null || ok=0
 done
-report "${ok}" "setup-uv keeps the caller's uv tool directories"
+! grep -E '(^[[:space:]]*|\$\(|[;&|][[:space:]]*)uvx?([[:space:]]|$)' \
+  "${work}/runs" > /dev/null || ok=0
+grep -E '"[$](UV|[{]STEPS_SETUP_UV_OUTPUTS_UV_PATH[}])"' "${work}/runs" \
+  > "${work}/uv-calls" || ok=0
+[ "$(wc -l < "${work}/uv-calls")" -ge 3 ] || ok=0
+! grep -vE -- '--python "\$|/usr/bin/env -i ' "${work}/uv-calls" \
+  > /dev/null || ok=0
+report "${ok}" "every uv call names its Python or runs under env -i"
+
+cases=$((cases + 1))
+ok=1
+# Python starts by absolute path from a variable, isolated, and the
+# step clears the variables macOS reads even under -I first
+grep -E '(^[[:space:]]*|\$\()"\$[{]?[A-Za-z_]+[}]?(/python)?" ' \
+  "${work}/runs" | grep -E 'python" ' > "${work}/py-calls" || ok=0
+[ "$(wc -l < "${work}/py-calls")" -ge 2 ] || ok=0
+! grep -vE 'python" -I ' "${work}/py-calls" > /dev/null || ok=0
+[ "$(grep -c '^[[:space:]]*unset PYTHONEXECUTABLE __PYVENV_LAUNCHER__$' \
+  "${work}/runs")" -ge 2 ] || ok=0
+! grep -E '(^[[:space:]]*|\$\(|[;&|][[:space:]]*)python3?([[:space:]]|$)' \
+  "${work}/runs" > /dev/null || ok=0
+report "${ok}" "every Python start is by absolute path, with -I"
+
+echo '== Install Python'
+# A uv that logs its arguments and the environment it gets, and reports
+# the Python held in its 'found' file. env -i leaves it no variable to
+# find its logs by, so it keeps them beside itself.
+installer="${work}/installer"
+mkdir -p "${installer}"
+cat > "${installer}/uv" << 'EOF'
+#!/bin/sh
+dir="${0%/*}"
+printf '%s\n' "$*" >> "${dir}/args"
+/usr/bin/env >> "${dir}/env"
+if [ "$1 $2" = 'python find' ]; then /bin/cat "${dir}/found"; fi
+EOF
+chmod +x "${installer}/uv"
+
+# install <install dir> <found>: run the step with uv reporting <found>
+# as the Python it installed under <install dir>, in an environment
+# holding every interpreter selector a caller could set
+install() {
+  : > "${work}/output"
+  rm -f "${installer}/args" "${installer}/env"
+  printf '%s\n' "$2" > "${installer}/found"
+  (cd -- "${root}" && env -i PATH="${stubs}:${PATH}" HOME="${HOME}" \
+    GITHUB_OUTPUT="${work}/output" UV="${installer}/uv" \
+    INSTALL_DIR="$1" CACHE_DIR="${work}/cache" PYTHON_VERSION='3.13' \
+    HTTPS_PROXY='http://proxy.invalid:3128' \
+    UV_PYTHON="${stubs}/interpreter" UV_SYSTEM_PYTHON=1 \
+    UV_PYTHON_INSTALL_DIR="${work}/caller-python" \
+    UV_PYTHON_INSTALL_MIRROR='https://127.0.0.1:9' \
+    UV_INTERNAL__PARENT_INTERPRETER="${stubs}/interpreter" \
+    VIRTUAL_ENV="${work}/caller-venv" CONDA_PREFIX="${work}/conda" \
+    PYTHONPATH="${work}" PYTHONEXECUTABLE="${stubs}/interpreter" \
+    bash --noprofile --norc -eo pipefail "${install}") \
+    > "${work}/out" 2>&1
+}
+
+cases=$((cases + 1))
+ok=1
+dir="${work}/python"
+install "${dir}" "${dir}/cpython-3.13/bin/python3.13" || ok=0
+grep -qxF "path=${dir}/cpython-3.13/bin/python3.13" "${work}/output" ||
+  ok=0
+grep -qxF 'python install --quiet --no-bin 3.13' "${installer}/args" ||
+  ok=0
+grep -qxF 'python find --managed-python 3.13' "${installer}/args" || ok=0
+# uv sees the allow-list, and what sh adds, and nothing else
+sed 's/=.*//' "${installer}/env" | sort -u > "${work}/names"
+printf '%s\n' HTTPS_PROXY OLDPWD PWD SHLVL UV_CACHE_DIR UV_NO_CONFIG \
+  UV_NO_PROJECT UV_PYTHON_INSTALL_DIR _ | sort > "${work}/allowed"
+[ -z "$(comm -23 "${work}/names" "${work}/allowed")" ] || ok=0
+grep -qxF "UV_PYTHON_INSTALL_DIR=${dir}" "${installer}/env" || ok=0
+grep -qxF 'HTTPS_PROXY=http://proxy.invalid:3128' "${installer}/env" ||
+  ok=0
+report "${ok}" "uv installs Python with only the allow-list to steer it"
+
+cases=$((cases + 1))
+ok=1
+! install "${dir}" "${work}/caller-venv/bin/python" || ok=0
+! grep -q '^path=' "${work}/output" || ok=0
+report "${ok}" "a Python outside the install directory stops the step"
+
+cases=$((cases + 1))
+ok=1
+# On Windows runner.temp has backslashes and the step appends slashes
+install 'D:\a\_temp/tox-run-action/python' \
+  'D:\a\_temp\tox-run-action\python\cpython-3.13\python.exe' || ok=0
+grep -qxF 'path=D:\a\_temp\tox-run-action\python\cpython-3.13\python.exe' \
+  "${work}/output" || ok=0
+report "${ok}" "a Windows path inside the install directory passes"
 
 echo "${cases} cases, ${failures} failed"
 [ "${failures}" -eq 0 ]

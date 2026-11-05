@@ -55,6 +55,17 @@ with open(path, "w") as f:
     f.write(s.replace(old, new, 1))' "${work}/lock/$1" "$2" "$3"
 }
 
+# The one "tox>=X" requirement in tox-lock/pyproject.toml, read rather
+# than hard-coded so a Dependabot bump of the floor keeps the test valid
+tox_spec="$(python3 -c 'import re, sys, tomllib
+with open(sys.argv[1], "rb") as f:
+    deps = tomllib.load(f).get("project", {}).get("dependencies", [])
+specs = [d for d in deps if isinstance(d, str)
+         and re.fullmatch(r"tox\s*>=\s*[0-9][0-9.]*", d)]
+if len(specs) != 1:
+    sys.exit(f"{sys.argv[1]} has {len(specs)} tox>= requirements, not one")
+print(specs[0])' "${root}/tox-lock/pyproject.toml")"
+
 fresh
 expect pass 'the lock in tox-lock/'
 
@@ -73,11 +84,11 @@ $'[[package]]\nname = "tox"\n'
 expect fail 'a lock holding two tox entries'
 
 fresh
-edit pyproject.toml '"tox>=4.67"' '"tox>=99"'
+edit pyproject.toml "\"${tox_spec}\"" '"tox>=99"'
 expect fail 'a lock whose tox is below the floor'
 
 fresh
-edit pyproject.toml '"tox>=4.67"' '"tox"'
+edit pyproject.toml "\"${tox_spec}\"" '"tox"'
 expect fail 'a project with no floor on tox'
 
 fresh

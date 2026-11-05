@@ -417,3 +417,201 @@ jobs:
           else
             echo "✅ Action failed with error=$EXPECTED"
           fi
+
+  test-workspace-isolation:
+    name: >-
+      Test workspace isolation (${{ matrix.os }}, ${{ matrix.selector }},
+      Python ${{ matrix.python || 'the action installs' }})
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      # An earlier step of the caller's job, such as code from the
+      # checkout under review, can plant an interpreter and point the
+      # job's settings at it. Each selector plants one way to choose
+      # it. With no python-version, the action installs its own Python.
+      matrix:
+        os: ['ubuntu-24.04', 'macos-15']
+        selector: ['request', 'active-environment']
+        python: ['3.12', '']
+    steps:
+      # yamllint disable-line rule:line-length
+      - uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43 # v2.22.3
+        if: ${{ runner.os == 'Linux' }}
+        with:
+          egress-policy: audit
+
+      # Beside the bait, not in the workspace root, so the interpreters
+      # tox picks for the caller's environment, which are the caller's
+      # to choose, do not reach the bait through PYTHONPATH
+      - name: 'Create minimal tox project'
+        shell: bash
+        run: |
+          # Create minimal tox project
+          mkdir isolation-test
+          printf '%s\n' '[tox]' 'env_list = check' 'skipsdist = true' \
+            '[testenv:check]' 'skip_install = true' \
+            'commands = python -c "print(42)"' > isolation-test/tox.ini
+
+      # As a caller's earlier step would: bait in the workspace, and
+      # settings for every later step that point at it. Each bait
+      # appends to the marker, and each executable then fails.
+      - name: 'Plant bait in the workspace'
+        shell: bash
+        env:
+          SELECTOR: ${{ matrix.selector }}
+        run: |
+          # Plant bait in the workspace
+          marker="${RUNNER_TEMP}/isolation-marker"
+          ws="${GITHUB_WORKSPACE}"
+          # bait <path>: an executable at <path> that logs its own path
+          bait() {
+            printf '#!/bin/sh\necho "%s ran" >> "%s"\nexit 1\n' \
+              "$1" "$marker" > "$1"
+            chmod +x "$1"
+          }
+          mkdir -p "$ws/.venv/bin" "$ws/.venv/conda-meta" "$ws/xdg-bin" \
+            "$ws/urllib" "$ws/pkg/urllib"
+          for name in python python3 python3.13 uv; do
+            bait "$ws/.venv/bin/$name"
+          done
+          for name in env bash; do
+            bait "$ws/xdg-bin/$name"
+          done
+          printf 'home = %s\nversion = 3.13.0\n' "$ws/.venv/bin" \
+            > "$ws/.venv/pyvenv.cfg"
+          : > "$ws/.venv/conda-meta/history"
+          for module in json base64 sitecustomize usercustomize \
+              urllib/__init__; do
+            for dir in "$ws" "$ws/pkg"; do
+              printf 'open(%s, "a").write("%s imported\\n")\n' \
+                "'$marker'" "$module" > "$dir/$module.py"
+            done
+          done
+
+          # GITHUB_PATH, not PATH in GITHUB_ENV: the runner puts the
+          # GITHUB_PATH entries ahead of the latter
+          echo "$ws/.venv/bin" >> "$GITHUB_PATH"
+          arch=$(uname -m)
+          if [ "$arch" = 'arm64' ]; then arch='aarch64'; fi
+          {
+            echo 'PYTHONPATH=pkg:.'
+            echo "PYTHONHOME=$ws/.venv"
+            echo "PYTHONUSERBASE=$ws/.venv"
+            echo "PYTHONSTARTUP=$ws/json.py"
+            echo "PYTHONEXECUTABLE=$ws/.venv/bin/python"
+            echo "__PYVENV_LAUNCHER__=$ws/.venv/bin/python"
+            echo 'UV_NO_CACHE=1'
+            echo "UV_PYTHON_ARCH=$arch"
+            echo 'UV_PYTHON_INSTALL_MIRROR=https://127.0.0.1:9'
+            echo "XDG_BIN_HOME=$ws/xdg-bin"
+            if [ "$SELECTOR" = 'request' ]; then
+              echo "UV_PYTHON=$ws/.venv/bin/python"
+              echo "UV_PYTHON_SEARCH_PATH=$ws/.venv/bin"
+              echo "UV_PYTHON_INSTALL_DIR=$ws/.venv/python"
+              echo 'UV_PYTHON_PREFERENCE=only-system'
+            else
+              # UV_PYTHON stays unset, so it cannot mask the discovery
+              # of an active environment
+              echo "VIRTUAL_ENV=$ws/.venv"
+              echo "CONDA_PREFIX=$ws/.venv"
+              echo 'CONDA_DEFAULT_ENV=base'
+              echo "UV_INTERNAL__PARENT_INTERPRETER=$ws/.venv/bin/python"
+              echo 'UV_INTERNAL__TEST_PYTHON_MANAGED=1'
+              echo "UV_CACHE_DIR=$ws/.venv/cache"
+            fi
+          } >> "$GITHUB_ENV"
+
+      # Without live bait its absence proves nothing. Python named by
+      # absolute path, started from the workspace without -I, must
+      # import it; PYTHONHOME would stop that Python starting at all.
+      - name: 'Check the bait is live'
+        shell: bash
+        run: |
+          # Check the bait is live
+          marker="${RUNNER_TEMP}/isolation-marker"
+          /usr/bin/env -u PYTHONHOME /usr/bin/python3 -c 'import json' ||
+            true
+          if [ ! -s "$marker" ]; then
+            echo "::error::The bait did not run, so the test proves nothing"
+            exit 1
+          fi
+          cat "$marker"
+          rm -f "$marker"
+
+      # tox still sees the planted PYTHONHOME and cannot build the
+      # caller's environment with it: that, like the interpreters tox
+      # picks, is the caller's. Reaching tox shows the action's own
+      # steps ran, and the checks below show what they started.
+      - name: 'Run the action (cold)'
+        id: cold
+        uses: $/
+        continue-on-error: true
+        with:
+          path_prefix: 'isolation-test'
+          python-version: ${{ matrix.python }}
+          tox-envs: 'check'
+          parallel: ''
+
+      - name: 'Check the cold run reached tox'
+        shell: bash
+        run: |
+          # Check the cold run reached tox
+          if [ ! -d isolation-test/.tox ]; then
+            echo "::error::The cold run did not reach tox"
+            exit 1
+          fi
+          rm -rf isolation-test/.tox
+
+      - name: 'Run the action (warm)'
+        id: warm
+        uses: $/
+        continue-on-error: true
+        with:
+          path_prefix: 'isolation-test'
+          python-version: ${{ matrix.python }}
+          tox-envs: 'check'
+          parallel: ''
+
+      - name: 'Verify no bait ran'
+        shell: bash
+        env:
+          COLD_BACKEND: ${{ steps.cold.outputs.build-backend }}
+          COLD_ERROR: ${{ steps.cold.outputs.error }}
+          WARM_BACKEND: ${{ steps.warm.outputs.build-backend }}
+          WARM_ERROR: ${{ steps.warm.outputs.error }}
+        run: |
+          # Verify no bait ran
+          status=0
+          marker="${RUNNER_TEMP}/isolation-marker"
+          if [ -e "$marker" ]; then
+            echo "::error::Bait ran:"
+            cat "$marker"
+            status=1
+          fi
+          case ":${PATH}:" in
+            *":${GITHUB_WORKSPACE}/xdg-bin:"*)
+              echo "::error::setup-uv put XDG_BIN_HOME on PATH"
+              status=1 ;;
+          esac
+          if [ ! -d isolation-test/.tox ]; then
+            echo "::error::The warm run did not reach tox"
+            status=1
+          fi
+          # The test project holds no lock file, and no input is invalid
+          if [ "$COLD_BACKEND" != 'none' ] || [ -n "$COLD_ERROR" ]; then
+            echo "::error::Cold run outputs: build-backend=$COLD_BACKEND" \
+                 "error=$COLD_ERROR"
+            status=1
+          fi
+          if [ "$WARM_BACKEND" != 'none' ] || [ -n "$WARM_ERROR" ]; then
+            echo "::error::Warm run outputs: build-backend=$WARM_BACKEND" \
+                 "error=$WARM_ERROR"
+            status=1
+          fi
+          if [ "$status" -eq 0 ]; then
+            echo "✅ No bait ran, and both runs kept their outputs"
+          fi
+          exit "$status"

@@ -12,7 +12,7 @@ version = "0"
 # makes an update that drops a supported Python fail to resolve, rather
 # than fall back to an ancient tox.
 requires-python = ">=3.11"
-dependencies = ["tox>=4.67.4"]
+dependencies = ["tox>=4.67.11"]
 
 [tool.uv]
 package = false

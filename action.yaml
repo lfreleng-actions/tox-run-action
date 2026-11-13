@@ -193,16 +193,36 @@ runs:
         fi
         echo "✅ Python $version can run tox"
 
+    # With UV_NO_MODIFY_PATH set, to any value, setup-uv leaves its own
+    # binary off PATH but still starts a bare "uv python find", so the
+    # caller's PATH would pick the uv that runs, ahead of every guard on
+    # the next step. A step cannot unset an inherited variable: refuse.
+    # Windows matches variable names in any letter case, so setup-uv
+    # and uv there read uv_no_modify_path too: match names that way.
+    - name: 'Refuse an inherited UV_NO_MODIFY_PATH'
+      id: no-modify-path
+      shell: bash
+      run: |
+        # Refuse an inherited UV_NO_MODIFY_PATH, in any letter case
+        # No 'grep -q': quitting early could fail compgen under pipefail
+        found=$(compgen -e | grep -ix 'UV_NO_MODIFY_PATH' || true)
+        if [[ -n "$found" ]]; then
+          echo "::error title=Unsupported environment::UV_NO_MODIFY_PATH" \
+            "is set, as '${found//$'\n'/, }', so setup-uv would start" \
+            "the first 'uv' on the caller's PATH; unset it before this" \
+            "action ❌"
+          exit 1
+        fi
+
     # 'Run tox' uses uv to install tox from the action's own lock.
     # setup-uv's only uv call for these inputs is "uv python find",
     # whose result it executes. An invalid preference makes uv refuse
     # its arguments before any lookup; setup-uv then reports the
     # Python version as "unknown", which nothing reads.
     # setup-uv puts tool-bin-dir on PATH, so it is the action's own
-    # directory, not one the caller's HOME, XDG_* or UV_TOOL_BIN_DIR
-    # names. On Windows setup-uv replaces UV_TOOL_DIR and
-    # UV_TOOL_BIN_DIR for the rest of the job unless given them, so
-    # there it keeps any the caller sets.
+    # directory on every OS, not one the caller's HOME, XDG_* or
+    # UV_TOOL_BIN_DIR names. On Windows setup-uv replaces UV_TOOL_DIR
+    # unless given it, so there it keeps any the caller sets.
     - name: 'Install uv'
       id: setup-uv
       # yamllint disable-line rule:line-length
@@ -215,8 +235,7 @@ runs:
         # repositories' jobs
         enable-cache: false
         tool-dir: ${{ runner.os == 'Windows' && env.UV_TOOL_DIR || '' }}
-        # yamllint disable-line rule:line-length
-        tool-bin-dir: ${{ runner.os == 'Windows' && env.UV_TOOL_BIN_DIR || format('{0}/tox-run-action/bin', runner.temp) }}
+        tool-bin-dir: ${{ runner.temp }}/tox-run-action/bin
       env:
         UV_NO_CONFIG: '1'
         UV_NO_PROJECT: '1'

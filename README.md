@@ -175,15 +175,17 @@ environments. The action does not install dependencies directly.
   lookup disabled, and puts `$RUNNER_TEMP/tox-run-action/bin` on
   `PATH` for the rest of the job, exporting `UV_TOOL_BIN_DIR` naming
   it, rather than a directory from the caller's `HOME`, `XDG_BIN_HOME`
-  or `UV_TOOL_BIN_DIR`. On Windows, where `setup-uv` sets
-  `UV_TOOL_DIR` and `UV_TOOL_BIN_DIR` for the rest of the job, the
-  action passes it any values the workflow sets in `env`, so those
-  stay as they were
-- The action trusts the caller's `PATH` for everything but Python: the
-  runner and `setup-uv` start `bash`, `tar` and other tools from it,
-  and `setup-uv` starts a bare `uv` from it when the job sets
-  `UV_NO_MODIFY_PATH`. Do not let untrusted code change `PATH` or set
-  that variable before this action runs
+  or `UV_TOOL_BIN_DIR`, on every runner OS. On Windows, where
+  `setup-uv` sets `UV_TOOL_DIR` for the rest of the job, the action
+  passes it any value the workflow sets in `env`, so that value stays
+- The action stops with an error when the job sets
+  `UV_NO_MODIFY_PATH`, to any value and in any letter case, since
+  Windows matches the name that way: with it, `setup-uv` would start
+  the first `uv` on the caller's `PATH`. Unset it before this action
+- The action trusts the caller's `PATH` for everything but Python and
+  uv: the runner and `setup-uv` start `bash`, `tar` and other tools
+  from it. Do not let untrusted code change `PATH` before this action
+  runs
 - Tox handles package building internally when `tox.ini` sets
   `isolated_build = True`
 - When `tox-envs` is not specified, tox will run its default environments

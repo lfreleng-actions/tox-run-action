@@ -62,6 +62,8 @@ extract 'Detect dependency management tool' "${detect}"
 extract 'Run tox' "${run}"
 install="${work}/install.sh"
 extract 'Install Python' "${install}"
+refuse="${work}/refuse.sh"
+extract 'Refuse an inherited UV_NO_MODIFY_PATH' "${refuse}"
 
 ws="${work}/ws"
 mkdir -p "${ws}"
@@ -420,23 +422,21 @@ setup_uv() {
 cases=$((cases + 1))
 ok=1
 # setup-uv's own "uv python find" must fail before any lookup, from the
-# action's directory, and put only the action's own directory on PATH
-# (on Windows, the caller's own when it sets one). Nothing else may be
-# set: a python-version input or UV_SYSTEM_PYTHON, UV_MANAGED_PYTHON or
-# UV_NO_MODIFY_PATH would reopen a lookup or leak to later steps.
+# action's directory, and put only the action's own directory on PATH,
+# on every OS. Nothing else may be set: a python-version input or
+# UV_SYSTEM_PYTHON, UV_MANAGED_PYTHON or UV_NO_MODIFY_PATH would reopen
+# a lookup or leak to later steps.
 [ "$(setup_uv '.with | keys | sort | join(" ")')" = \
   'enable-cache tool-bin-dir tool-dir version working-directory' ] || ok=0
 want='UV_NO_CONFIG UV_NO_PROJECT UV_PYTHON_ARCH UV_PYTHON_INSTALL_DIR'
 [ "$(setup_uv '.env | keys | sort | join(" ")')" = \
   "${want} UV_PYTHON_PREFERENCE" ] || ok=0
-want="\${{ runner.os == 'Windows' && env.UV_TOOL_BIN_DIR || "
-want+="format('{0}/tox-run-action/bin', runner.temp) }}"
-[ "$(setup_uv '.with.tool-bin-dir')" = "${want}" ] || ok=0
 while read -r key want; do
   [ "$(setup_uv ".${key}")" = "${want}" ] || ok=0
 done << 'EOF'
 with.working-directory ${{ github.action_path }}
 with.enable-cache false
+with.tool-bin-dir ${{ runner.temp }}/tox-run-action/bin
 with.tool-dir ${{ runner.os == 'Windows' && env.UV_TOOL_DIR || '' }}
 env.UV_NO_CONFIG 1
 env.UV_NO_PROJECT 1
@@ -445,6 +445,29 @@ env.UV_PYTHON_ARCH
 env.UV_PYTHON_INSTALL_DIR ${{ runner.temp }}/tox-run-action/python
 EOF
 report "${ok}" "setup-uv runs no lookup and adds only its own dir to PATH"
+
+cases=$((cases + 1))
+ok=1
+# An inherited UV_NO_MODIFY_PATH, empty or not, would make setup-uv
+# start the caller's uv: a step before it must refuse the variable. On
+# Windows setup-uv and uv match its name in any letter case, so the
+# step must too; a name that merely contains it is not refused.
+names="$(yq -r '.runs.steps[] | .id' "${root}/action.yaml")"
+before="$(sed -n '/^setup-uv$/q;p' <<< "${names}")"
+grep -qx 'no-modify-path' <<< "${before}" || ok=0
+for name in '' UV_NO_MODIFY_PATH_X X_UV_NO_MODIFY_PATH; do
+  env -i PATH="${PATH}" ${name:+"${name}=1"} \
+    bash --noprofile --norc -eo pipefail "${refuse}" > /dev/null 2>&1 ||
+    ok=0
+done
+for name in UV_NO_MODIFY_PATH uv_no_modify_path Uv_No_Modify_Path; do
+  for value in '' 1; do
+    ! env -i PATH="${PATH}" "${name}=${value}" \
+      bash --noprofile --norc -eo pipefail "${refuse}" > /dev/null 2>&1 ||
+      ok=0
+  done
+done
+report "${ok}" "an inherited UV_NO_MODIFY_PATH, in any case, stops the action"
 
 # Every run block, with continuation lines joined and comments dropped
 yq -r '.runs.steps[] | select(has("run")) | .run' "${root}/action.yaml" |
